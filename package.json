@@ -1,0 +1,43 @@
+{
+  "name": "duplios",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "dev:server": "tsx watch server/server.ts",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "server": "tsx server/server.ts",
+    "lint": "eslint .",
+    "check:deploy": "node scripts/check-deploy-env.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.86.0",
+    "@vitejs/plugin-react": "^5.0.4",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "stripe": "^22.1.0",
+    "vite": "^7.1.12"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.7.2",
+    "@types/react": "^19.1.16",
+    "@types/react-dom": "^19.1.9",
+    "autoprefixer": "^10.4.21",
+    "eslint": "^9.38.0",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.18",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
