@@ -1,0 +1,6 @@
+{
+  "name": "ProspectFlow MY Solo",
+  "description": "A solo-user mobile-first prospecting, webinar funnel, follow-up, and growth system designed for Amway Malaysia business workflows.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_OPENAI_API"]
+}
