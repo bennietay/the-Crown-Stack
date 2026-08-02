@@ -6,6 +6,7 @@ import { sendPasswordResetEmail } from "firebase/auth";
 import { auth } from "@/src/firebase";
 
 export function Login() {
+  const googleAuthEnabled = import.meta.env.VITE_GOOGLE_AUTH_ENABLED === "true";
   const loginUser = useAuthStore(state => state.loginUser);
   const loginWithGoogle = useAuthStore(state => state.loginWithGoogle);
   const authStoreError = useAuthStore(state => state.error);
@@ -213,7 +214,7 @@ export function Login() {
             </Button>
           </form>
 
-          <div className="mt-8">
+          {googleAuthEnabled && <div className="mt-8">
             <div className="relative">
               <div className="absolute inset-0 flex items-center">
                 <div className="w-full border-t border-slate-200"></div>
@@ -239,7 +240,7 @@ export function Login() {
                 Google
               </button>
             </div>
-          </div>
+          </div>}
 
           <p className="mt-6 text-center text-sm text-slate-500">
             Access is invitation-only. Contact your workspace administrator if you need an account.
