@@ -1,427 +1,373 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
+export type Role = "super_admin" | "workspace_admin" | "sales" | "operations" | "support" | "customer";
 
-export enum LeadStage {
-  New = "New",
-  Messaged = "Messaged",
-  Replied = "Replied",
-  Interested = "Interested",
-  Appointment = "Appointment",
-  Customer = "Customer",
-  BusinessProspect = "Business Prospect",
-  WebinarRegistered = "Webinar Registered",
-  WebinarAttended = "Webinar Attended",
-  ReplayWatched = "Replay Watched",
-  FollowUpPageClicked = "Follow-Up Page Clicked",
-  OrderedProduct = "Ordered Product",
-  RepeatCustomer = "Repeat Customer",
-  NotNow = "Not Now",
-  DoNotContact = "Do Not Contact"
-}
-
-export enum InterestType {
-  Wellness = "Wellness",
-  Beauty = "Beauty",
-  HomeCare = "Home Care",
-  SideIncome = "Side Income",
-  Unknown = "Unknown"
-}
-
-export enum PermissionStatus {
-  OkToFollowUp = "OK to follow up",
-  NoReplyYet = "No reply yet",
-  DoNotContact = "Do not contact"
-}
-
-export enum TaskType {
-  AddLead = "Add Lead",
-  FirstMessage = "First Message",
-  FollowUp = "Follow Up",
-  InviteToWebinar = "Invite to Webinar",
-  SendReplay = "Send Replay",
-  AskReferral = "Ask Referral",
-  PostContent = "Post Content",
-  PaymentFollowUp = "Payment Follow-Up",
-  ResourceLearning = "Resource Learning",
-  OrderConfirmation = "Order Confirmation",
-  DeliveryFollowUp = "Delivery Follow-Up",
-  ReorderFollowUp = "Reorder Follow-Up",
-  ProductFeedbackRequest = "Product Feedback Request"
-}
-
-export enum TaskStatus {
-  Pending = "Pending",
-  Completed = "Completed"
-}
-
-export enum TaskPriority {
-  Low = "Low",
-  Medium = "Medium",
-  High = "High"
-}
-
-export enum WebinarType {
-  SideIncomeWebinar = "Side-Income Webinar",
-  WellnessWebinar = "Wellness Webinar",
-  BeautyWebinar = "Beauty Webinar",
-  HomeCareWebinar = "Home Care Webinar",
-  Custom = "Custom"
-}
-
-export enum PageType {
-  SignUp = "Sign-Up",
-  ThankYou = "Thank You",
-  Replay = "Replay",
-  FollowUpSignUp = "Follow-Up Sign-Up"
-}
-
-export enum CtaType {
-  FormSubmit = "Form Submit",
-  WhatsApp = "WhatsApp",
-  StripePaymentLink = "Stripe Payment Link",
-  OfficialAmwayLink = "Official Amway Link",
-  ReplayLink = "Replay Link",
-  CustomUrl = "Custom URL"
-}
-
-export enum WebinarRegistrationStage {
-  Registered = "Registered",
-  JoinedWhatsApp = "Joined WhatsApp",
-  ReminderSent = "Reminder Sent",
-  Attended = "Attended",
-  WatchedReplay = "Watched Replay",
-  ClickedCTA = "Clicked CTA",
-  RequestedProductInfo = "Requested Product Info",
-  RequestedBusinessInfo = "Requested Business Info",
-  SentFollowUpPage = "Sent Follow-Up Page",
-  ReadyForSignUpConversation = "Ready for Sign-Up Conversation",
-  Customer = "Customer",
-  BusinessProspect = "Business Prospect",
-  NotNow = "Not Now"
-}
-
-export enum PaymentType {
-  PaidWebinar = "Paid webinar",
-  Workshop = "Workshop",
-  Consultation = "Consultation",
-  DigitalGuide = "Digital guide",
-  Other = "Other"
-}
-
-export enum PaymentStatus {
-  Unpaid = "Unpaid",
-  Pending = "Pending",
-  Paid = "Paid",
-  Refunded = "Refunded",
-  Cancelled = "Cancelled"
-}
+export const ROLE_DISPLAY_NAMES: Record<Role, string> = {
+  super_admin: "Super Admin",
+  workspace_admin: "Workspace Admin",
+  sales: "Sales User",
+  operations: "Operations User",
+  support: "Support User",
+  customer: "Customer",
+};
 
 export interface User {
   id: string;
+  uid?: string;
   email: string;
   name: string;
+  role: Role;
+  customerId?: string;
+  activeWorkspaceId?: string;
+  workspaceIds?: string[];
+  createdAt?: string;
+  updatedAt?: string;
 }
 
-export interface Settings {
+export interface Workspace {
+  id: string;
   name: string;
-  whatsapp_phone: string;
-  email: string;
-  brand_name: string;
-  brand_color: string;
-  default_cta_text: string;
-  daily_lead_target: number;
-  daily_message_target: number;
-  daily_follow_up_target: number;
-  stripe_payment_link: string;
-  grow_mode: boolean;
-  scale_mode: boolean;
-  compliance_accepted: boolean;
+  type: "agency" | "bennie_studio";
+  createdAt: string;
+}
+
+export interface LeadQualificationAnswers {
+  businessResult?: string;
+  currentProblem?: string;
+  hasExistingSite?: boolean | string;
+  timeline?: string;
+  budgetRange?: string;
+  isDecisionMaker?: boolean | string;
+  decisionMakerInvolved?: boolean | string;
+  delayImpact?: string;
+  ongoingManagementRequired?: boolean | string;
+  requiredIntegrations?: string;
+}
+
+export interface LeadQualificationAudit {
+  date: string;
+  user: string;
+  prevScore: number;
+  newScore: number;
+  reason: string;
+}
+
+export interface LeadClosingOffer {
+  optionA: { name: string; otc: number; details: string };
+  optionB: { name: string; mrc: number; details: string };
+  selectedOption?: "A" | "B";
+  mainObjection?: string;
+  expectedDecisionDate?: string;
 }
 
 export interface Lead {
   id: string;
-  name: string;
-  phone: string;
+  workspaceId: string;
+  companyName?: string;
+  contactName: string;
   email: string;
-  platform: string;
-  source: string;
-  interest_type: InterestType;
-  lead_temperature: "Cold" | "Warm" | "Hot";
-  stage: LeadStage;
-  permission_status: PermissionStatus;
-  best_angle: string;
-  notes: string;
-  last_contacted_at: string | null;
-  next_follow_up_at: string | null;
-  created_at: string;
-  updated_at: string;
+  phone?: string;
+  country?: string;
+  status: "new" | "imported_review_required" | "researching" | "qualified" | "ready_for_outreach" | "contacted" | "replied" | "discovery" | "proposal" | "negotiation" | "won" | "lost" | "nurture" | "suppressed";
+  tags?: string[];
+  assignedTo?: string;
+  score?: number;
+  temperature?: "hot" | "warm" | "cold";
+  qualificationClassification?: "hot" | "warm" | "cold" | "nurture" | "blocked";
+  qualificationAnswers?: LeadQualificationAnswers;
+  qualificationAudit?: LeadQualificationAudit[];
+  messagesSentCount?: number;
+  repliesCount?: number;
+  consentStatus?: "opted_in" | "opted_out" | "pending";
+  complianceStatus?: "compliant" | "review_required";
+  estimatedOtc?: number;
+  estimatedMrc?: number;
+  buyingIntentIndicators?: string[];
+  relationshipHistory?: Array<{ date: string; type: string; summary: string }>;
+  closingOffer?: LeadClosingOffer;
+  lastContactedAt?: string;
+  nextActionDate?: string;
+  source?: string;
+  utm_source?: string;
+  details?: Record<string, any>;
+  createdAt: string;
+  updatedAt: string;
 }
 
-export interface Interaction {
+export interface FollowUpTask {
   id: string;
-  lead_id: string;
-  type: string;
-  notes: string;
-  date: string;
-  created_at: string;
-}
-
-export interface Task {
-  id: string;
-  lead_id: string | null;
-  task_type: TaskType;
+  workspaceId: string;
+  leadId?: string;
+  opportunityId?: string;
+  customerId?: string;
   title: string;
-  description: string;
-  due_date: string;
-  status: TaskStatus;
-  priority: TaskPriority;
-  created_at: string;
-  completed_at: string | null;
+  channel: "email" | "whatsapp" | "call" | "manual";
+  category?: "revenue" | "customer_engagement";
+  reason?: string;
+  recommendedAction?: string;
+  revenueOpportunity?: number;
+  contactName?: string;
+  companyName?: string;
+  dueDate: string;
+  status: "pending" | "completed" | "snoozed";
+  snoozedUntil?: string;
+  owner: string;
+  notes?: string;
+  outcome?: string;
+  completedAt?: string;
+  createdAt: string;
 }
 
-export interface Script {
+export interface Opportunity {
   id: string;
-  title: string;
-  category: string;
-  content: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface Resource {
-  id: string;
-  title: string;
-  category: string;
-  description: string;
-  url: string;
-  status: string;
-  notes: string;
-  last_reviewed_at: string;
-}
-
-export interface Webinar {
-  id: string;
-  title: string;
-  slug: string;
-  topic: string;
-  webinar_type: WebinarType;
-  date: string;
-  time: string;
-  duration: number; // in minutes
-  status: "Draft" | "Published";
-  video_url: string;
-  replay_url: string;
-  stripe_payment_link: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface WebinarPage {
-  id: string;
-  webinar_id: string;
-  page_type: PageType;
-  slug: string;
-  headline: string;
-  subheadline: string;
-  body_content: string;
-  cta_text: string;
-  cta_type: CtaType;
-  cta_url: string;
-  video_url: string;
-  status: "Draft" | "Published";
-  seo_title?: string;
-  meta_description?: string;
-  canonical_url?: string;
-  og_image_url?: string;
-  brand_logo_url?: string;
-  brand_accent_color?: string;
-  hero_image_url?: string;
-  hero_layout?: "Split" | "Centered" | "Editorial" | "Video";
-  audience_segment?: string;
-  tracking_source?: string;
-  trust_points?: string;
-  faq_items?: string;
-  testimonial_items?: string;
-  custom_sections?: string;
-  footer_disclaimer?: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface WebinarRegistration {
-  id: string;
-  webinar_id: string;
-  name: string;
-  phone: string;
-  email: string;
-  interest_type: InterestType;
-  source: string;
-  consent_to_follow_up: boolean;
-  status: WebinarRegistrationStage;
-  created_at: string;
-}
-
-export interface Payment {
-  id: string;
-  lead_id: string | null;
-  webinar_id: string | null;
-  stripe_payment_link: string;
-  amount: number;
+  workspaceId: string;
+  leadId?: string;
+  customerId?: string;
+  title?: string;
+  name?: string;
+  opportunityOwner?: string;
+  stage: "Qualified" | "Discovery" | "Solution proposed" | "Proposal sent" | "Negotiation" | "Verbal agreement" | "Won" | "Lost" | string;
+  expectedValue?: number;
+  expectedOtcValue?: number;
+  expectedMrcValue?: number;
+  estimatedValue?: number;
   currency: string;
-  status: PaymentStatus;
-  payment_type: PaymentType;
-  paid_at: string | null;
-  created_at: string;
+  probability?: number;
+  expectedCloseDate?: string;
+  productInterest?: string[];
+  lostReason?: string;
+  problemSummary?: string;
+  desiredOutcome?: string;
+  recommendedPackage?: string;
+  alternativePackage?: string;
+  mainObjection?: string;
+  decisionCriteria?: string;
+  decisionMaker?: string;
+  expectedDecisionDate?: string;
+  proposalStatus?: string;
+  paymentStatus?: string;
+  nextClosingAction?: string;
+  source?: string;
+  lastActivity?: string;
+  nextAction?: string;
+  stageHistory?: Array<{ fromStage: string; toStage: string; changedAt: string; changedBy: string; reason?: string }>;
+  createdAt: string;
+  updatedAt?: string;
 }
 
-export interface ContentPost {
-  id: string;
-  title: string;
-  platform: string;
-  post_date: string;
-  hook: string;
-  caption: string;
-  cta: string;
-  views: number;
-  comments: number;
-  dms: number;
-  leads_created: number;
-  category: string;
-  created_at: string;
+export interface CustomerProjectDetails {
+  stage: "onboarding" | "requirements_gathering" | "design" | "build" | "staging_review" | "revisions" | "launch_prep" | "live";
+  completionPercentage: number;
+  outstandingCustomerActions: string[];
+  pendingApprovals: string[];
+  latestUpdate: string;
+  nextMilestone: string;
+  totalRevisionRounds: number;
+  revisionRoundsUsed: number;
 }
 
-export interface Referral {
-  id: string;
-  referrer_name: string;
-  referred_name: string;
-  referred_phone: string;
-  interest_type: InterestType;
-  status: string;
-  follow_up_date: string;
-  notes: string;
-  created_at: string;
+export interface CustomerHealthDetails {
+  status: "healthy" | "attention_needed" | "at_risk" | "critical";
+  score: number;
+  paymentStatus: "current" | "late" | "failed";
+  ticketSentiment: "positive" | "neutral" | "frustrated";
+  projectDelayDays: number;
+  missedActionsCount: number;
+  unresolvedTicketsCount: number;
+  renewalDate?: string;
+  lastCommunicatedAt?: string;
 }
 
-export interface Event {
-  id: string;
-  event_name: string;
-  event_type: string;
-  location: string;
-  event_date: string;
-  target_contacts: number;
-  actual_contacts: number;
-  leads_created: number;
-  follow_ups_created: number;
-  notes: string;
-  created_at: string;
+export interface WaasConversionDetails {
+  status: "not_assessed" | "recommended" | "offered" | "interested" | "accepted" | "declined" | "follow_up_later" | "active_subscription" | "cancelled";
+  recommendedPlan?: string;
+  proposedMrc?: number;
+  currentMrc?: number;
+  includedAllowance?: string;
+  extraWorkRate?: number;
+  nextBillingDate?: string;
+  renewalRisk?: string;
 }
 
-export interface UtmLink {
+export interface CustomerRevisionRequest {
   id: string;
+  page: string;
+  section: string;
+  currentContent: string;
+  requestedChange: string;
+  reason: string;
+  attachmentUrl?: string;
+  priority: "low" | "medium" | "high";
+  status: "pending" | "approved" | "completed" | "rejected";
+  createdAt: string;
+}
+
+export interface Customer {
+  id: string;
+  workspaceId: string;
   name: string;
-  base_url: string;
-  utm_source: string;
-  utm_medium: string;
-  utm_campaign: string;
-  utm_content: string;
-  final_url: string;
-  created_at: string;
+  email: string;
+  phone?: string;
+  country?: string;
+  status?: "onboarding" | "active" | "inactive";
+  subscriptionId?: string;
+  health?: CustomerHealthDetails;
+  waas?: WaasConversionDetails;
+  project?: CustomerProjectDetails;
+  revisions?: CustomerRevisionRequest[];
+  supportAllowance?: { includedTickets: number; ticketsUsed: number; nextBillingDate: string };
+  createdAt: string;
+  updatedAt: string;
 }
 
-export interface QrCode {
+export interface Ticket {
   id: string;
-  name: string;
-  type: string;
-  content: string;
-  created_at: string;
+  workspaceId: string;
+  customerId: string;
+  subject: string;
+  status: "new" | "open" | "in_progress" | "waiting_for_customer" | "waiting_for_third_party" | "resolved" | "closed";
+  priority: "critical" | "high" | "normal" | "low";
+  classification?: "bug" | "content_change" | "feature_request" | "technical_support" | "security_update" | "domain_dns" | "billing" | string;
+  assignedTo?: string;
+  slaDeadline?: string;
+  estimatedHours?: number;
+  estimatedWorkHours?: number;
+  ticketType?: "included_support" | "billable_change" | "defect" | "hosting_issue" | "training" | "third_party";
+  isBillable?: boolean;
+  billableProposalId?: string;
+  waitingForCustomer?: boolean;
+  codexEligible?: boolean;
+  hostingerActionRequired?: boolean;
+  isEmergency?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SystemSettings {
+  workspaceId: string;
+  business: {
+    name: string;
+    currency: string;
+    locale: string;
+    timezone: string;
+    whatsappNumber?: string;
+    leadSlaHours: number;
+    monthlyTarget: number;
+  };
+  sales: {
+    taxRate: number;
+    proposalValidityDays: number;
+    hotThreshold: number;
+    warmThreshold: number;
+    defaultOwner?: string;
+  };
+  leadCapture: {
+    eyebrow?: string;
+    headline: string;
+    subheadline: string;
+    offerTitle?: string;
+    benefitBullets?: string[];
+    responsePromise?: string;
+    trustNote?: string;
+    ctaLabel?: string;
+    successMessage: string;
+    serviceOptions: string[];
+    budgetRanges: string[];
+    timingOptions: string[];
+    whatsappUrl?: string;
+    bookingUrl?: string;
+    privacyUrl?: string;
+    termsUrl?: string;
+    requireCompany?: boolean;
+    requirePhone?: boolean;
+    requireCountry?: boolean;
+  };
+  cadence: Array<{ day: number; channel: "email" | "whatsapp" | "call" | "manual"; title: string }>;
+  integrations?: {
+    firebaseConfigured: boolean;
+    whatsappConfigured: boolean;
+    lastVerified?: string;
+  };
+  updatedAt: string;
+  updatedBy: string;
 }
 
 export interface Product {
   id: string;
-  product_name: string;
-  product_code: string;
-  category: string;
-  brand: string;
-  description: string;
-  image_url: string;
-  retail_price: number;
-  abo_price: number;
-  pv: number;
-  bv: number;
+  workspaceId: string;
+  name: string;
+  type: "otc" | "mrc";
+  price: number;
   currency: string;
-  availability_status: "Available" | "Out of Stock" | "Limited" | "Discontinued" | "Unknown";
-  official_product_url: string;
-  notes: string;
-  imported_at: string | null;
-  created_at: string;
-  updated_at: string;
 }
 
-export interface ProductImport {
-  id: string;
-  file_name: string;
-  import_status: "Pending" | "Completed" | "Failed";
-  total_rows: number;
-  successful_rows: number;
-  failed_rows: number;
-  error_report: string;
-  imported_at: string;
-  created_at: string;
+export interface ProposalScope {
+  pages: string[];
+  features: string[];
+  integrations: string[];
+  deliverables: string[];
+  exclusions: string[];
+  customerResponsibilities: string[];
 }
 
-export interface Order {
-  id: string;
-  lead_id: string | null;
-  customer_name: string;
-  customer_phone: string;
-  customer_email: string;
-  order_date: string;
-  order_status: "Draft" | "Confirmed" | "Payment Pending" | "Paid" | "Ordered from Amway" | "Ready for Delivery" | "Delivered" | "Completed" | "Cancelled" | "Refunded";
-  payment_status: "Unpaid" | "Pending" | "Paid" | "Refunded" | "Cancelled";
-  payment_method: "Cash" | "Bank Transfer" | "DuitNow" | "Stripe Card Payment" | "Other";
-  subtotal: number;
-  discount: number;
-  delivery_fee: number;
-  total_amount: number;
-  currency: string;
-  stripe_payment_link: string;
-  notes: string;
-  created_at: string;
-  updated_at: string;
+export interface ProposalPricing {
+  otcCharges: number;
+  mrcCharges: number;
+  taxes: number;
+  deposit: number;
+  paymentSchedule: string;
 }
 
-export interface OrderItem {
-  id: string;
-  order_id: string;
-  product_id: string;
-  product_name: string;
-  product_code: string;
-  quantity: number;
-  unit_price: number;
-  total_price: number;
-  pv: number;
-  bv: number;
-  created_at: string;
+export interface ProposalMilestone {
+  name: string;
+  estimatedDays: number;
+  deliverable: string;
 }
 
-export interface Bundle {
-  id: string;
-  bundle_name: string;
-  category: string;
-  description: string;
-  total_price: number;
-  notes: string;
-  status: string;
-  created_at: string;
-  updated_at: string;
+export interface ProposalThirdPartyCost {
+  item: string;
+  cost: number;
+  recurring: boolean;
 }
 
-export interface BundleItem {
+export interface ProposalViewDeviceLog {
+  viewedAt: string;
+  userAgent?: string;
+  ipHash?: string;
+}
+
+export interface Proposal {
   id: string;
-  bundle_id: string;
-  product_id: string;
-  quantity: number;
-  created_at: string;
+  workspaceId: string;
+  opportunityId: string;
+  version?: number;
+  parentProposalId?: string;
+  title?: string;
+  customerProblem?: string;
+  objectives?: string[];
+  recommendedSolution?: string;
+  scope?: ProposalScope;
+  milestones?: ProposalMilestone[];
+  estimatedDeliveryConditions?: string;
+  revisionAllowance?: number;
+  hostingArrangement?: string;
+  thirdPartyCosts?: ProposalThirdPartyCost[];
+  pricing?: ProposalPricing;
+  terms?: string;
+  expiryDate?: string;
+  expiresAt?: string;
+  token?: string;
+  tokenHash?: string;
+  status: "Draft" | "Internal review" | "Approved" | "Delivery pending" | "Delivered" | "Viewed" | "Accepted" | "Rejected" | "Expired" | "Superseded" | "Payment pending" | "Paid" | string;
+  items?: Array<{ productId: string; quantity: number; type?: "otc" | "mrc"; price?: number }>;
+  totalOTC: number;
+  totalMRC: number;
+  taxRate?: number;
+  currency?: string;
+  viewsCount?: number;
+  firstViewedAt?: string;
+  lastViewedAt?: string;
+  viewDeviceLogs?: ProposalViewDeviceLog[];
+  decisionDate?: string;
+  outcomeReason?: string;
+  createdAt: string;
+  updatedAt?: string;
 }
