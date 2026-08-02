@@ -1,0 +1,147 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isSuperAdmin() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && userDoc().role == 'super_admin';
+    }
+
+    function membershipPath(workspaceId) {
+      return /databases/$(database)/documents/workspaceUsers/$(workspaceId + '_' + request.auth.uid);
+    }
+
+    function isMember(workspaceId) {
+      return signedIn() && (
+        isSuperAdmin() || (
+          exists(membershipPath(workspaceId)) &&
+          get(membershipPath(workspaceId)).data.status == 'active'
+        )
+      );
+    }
+
+    function role(workspaceId) {
+      return isSuperAdmin() ? 'super_admin' : get(membershipPath(workspaceId)).data.role;
+    }
+
+    function isAdmin(workspaceId) {
+      return isMember(workspaceId) && role(workspaceId) in ['super_admin', 'workspace_admin'];
+    }
+
+    function isSales(workspaceId) {
+      return isMember(workspaceId) && role(workspaceId) in ['super_admin', 'workspace_admin', 'sales'];
+    }
+
+    function isOperations(workspaceId) {
+      return isMember(workspaceId) && role(workspaceId) in ['super_admin', 'workspace_admin', 'operations'];
+    }
+
+    function isSupport(workspaceId) {
+      return isMember(workspaceId) && role(workspaceId) in ['super_admin', 'workspace_admin', 'support', 'operations'];
+    }
+
+    function isStaff(workspaceId) {
+      return isMember(workspaceId) && role(workspaceId) in ['super_admin', 'workspace_admin', 'sales', 'operations', 'support'];
+    }
+
+    function workspaceUnchanged() {
+      return request.resource.data.workspaceId == resource.data.workspaceId;
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || isSuperAdmin());
+      allow create: if isSuperAdmin();
+      allow update: if isSuperAdmin() || (
+        signedIn() && request.auth.uid == userId &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'workspaceIds'])
+      );
+      allow delete: if isSuperAdmin();
+    }
+
+    match /workspaces/{workspaceId} {
+      allow read: if isMember(workspaceId);
+      allow write: if isAdmin(workspaceId);
+    }
+
+    match /workspaceUsers/{membershipId} {
+      allow read: if signedIn() && (
+        isSuperAdmin() || resource.data.userId == request.auth.uid || isAdmin(resource.data.workspaceId)
+      );
+      allow create: if isAdmin(request.resource.data.workspaceId);
+      allow update: if isAdmin(resource.data.workspaceId) && request.resource.data.workspaceId == resource.data.workspaceId;
+      allow delete: if isAdmin(resource.data.workspaceId);
+    }
+
+    match /leads/{id} {
+      allow read: if isStaff(resource.data.workspaceId);
+      allow create: if isSales(request.resource.data.workspaceId);
+      allow update: if isSales(resource.data.workspaceId) && workspaceUnchanged();
+      allow delete: if isSales(resource.data.workspaceId);
+    }
+
+    match /opportunities/{id} {
+      allow read: if isStaff(resource.data.workspaceId);
+      allow create: if isSales(request.resource.data.workspaceId);
+      allow update: if isSales(resource.data.workspaceId) && workspaceUnchanged();
+      allow delete: if isAdmin(resource.data.workspaceId);
+    }
+
+    match /products/{id} {
+      allow read: if isStaff(resource.data.workspaceId);
+      allow create: if isMember(request.resource.data.workspaceId) && role(request.resource.data.workspaceId) in ['super_admin', 'workspace_admin', 'sales', 'operations'];
+      allow update: if isMember(resource.data.workspaceId) && role(resource.data.workspaceId) in ['super_admin', 'workspace_admin', 'sales', 'operations'] && workspaceUnchanged();
+      allow delete: if isAdmin(resource.data.workspaceId);
+    }
+
+    match /proposals/{id} {
+      allow read: if isStaff(resource.data.workspaceId);
+      allow create: if isSales(request.resource.data.workspaceId);
+      allow update: if isSales(resource.data.workspaceId) && workspaceUnchanged();
+      allow delete: if isAdmin(resource.data.workspaceId);
+    }
+
+    match /customers/{id} {
+      allow read: if isStaff(resource.data.workspaceId);
+      allow create: if isSales(request.resource.data.workspaceId) || isOperations(request.resource.data.workspaceId);
+      allow update: if (isSales(resource.data.workspaceId) || isOperations(resource.data.workspaceId)) && workspaceUnchanged();
+      allow delete: if isAdmin(resource.data.workspaceId);
+    }
+
+    match /tickets/{id} {
+      allow read: if isStaff(resource.data.workspaceId);
+      allow create: if isStaff(request.resource.data.workspaceId);
+      allow update: if isSupport(resource.data.workspaceId) && workspaceUnchanged();
+      allow delete: if isAdmin(resource.data.workspaceId);
+    }
+
+    match /tasks/{id} {
+      allow read: if isStaff(resource.data.workspaceId);
+      allow create: if isSales(request.resource.data.workspaceId) || isOperations(request.resource.data.workspaceId);
+      allow update: if (isSales(resource.data.workspaceId) || isOperations(resource.data.workspaceId)) && workspaceUnchanged();
+      allow delete: if isAdmin(resource.data.workspaceId);
+    }
+
+    match /systemSettings/{workspaceId} {
+      allow read, write: if isAdmin(workspaceId);
+    }
+
+    match /auditLogs/{id} {
+      allow read: if isAdmin(resource.data.workspaceId);
+      allow write: if false;
+    }
+
+    match /proposalAcceptances/{id} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
