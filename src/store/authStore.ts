@@ -8,7 +8,7 @@ import {
   GoogleAuthProvider,
   signInWithPopup 
 } from 'firebase/auth';
-import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, getDoc, collection, getDocs } from 'firebase/firestore';
 
 interface AuthState {
   user: User | null;
@@ -75,14 +75,21 @@ const resolveUserRecord = async (firebaseUser: any): Promise<{ userObj: User, wo
     updatedAt: raw.updatedAt || new Date().toISOString(),
   } as User;
 
-  // Fetch workspace memberships for this user
-  const wuQuery = query(collection(db, 'workspaceUsers'), where('userId', '==', firebaseUser.uid));
-  const wuSnap = await getDocs(wuQuery);
-  
   const workspaceRoles: Record<string, Role> = {};
   const workspaceIds: string[] = [];
-  wuSnap.forEach(doc => {
-    const data = doc.data();
+  const assignedWorkspaceIds = Array.isArray(userObj.workspaceIds)
+    ? [...new Set(userObj.workspaceIds.filter(Boolean))]
+    : [];
+
+  const membershipSnapshots = await Promise.all(
+    assignedWorkspaceIds.map(workspaceId =>
+      getDoc(doc(db, 'workspaceUsers', `${workspaceId}_${firebaseUser.uid}`))
+    )
+  );
+
+  membershipSnapshots.forEach(membershipSnapshot => {
+    if (!membershipSnapshot.exists()) return;
+    const data = membershipSnapshot.data();
     if (data.status === 'active' || !data.status) {
       const canonicalRole = normalizeRole(data.role);
       workspaceRoles[data.workspaceId] = canonicalRole;
@@ -93,15 +100,18 @@ const resolveUserRecord = async (firebaseUser: any): Promise<{ userObj: User, wo
   let workspaces: Workspace[] = [];
   if (userObj.role === 'super_admin') {
     const allWs = await getDocs(collection(db, 'workspaces'));
-    allWs.forEach(doc => {
-       workspaces.push(doc.data() as Workspace);
-       if (!workspaceRoles[doc.id]) workspaceRoles[doc.id] = 'super_admin';
+    allWs.forEach(workspaceDoc => {
+       workspaces.push({ ...workspaceDoc.data(), id: workspaceDoc.id } as Workspace);
+       if (!workspaceRoles[workspaceDoc.id]) workspaceRoles[workspaceDoc.id] = 'super_admin';
     });
   } else if (workspaceIds.length > 0) {
-    const wsQuery = query(collection(db, 'workspaces'), where('id', 'in', workspaceIds));
-    const wsSnap = await getDocs(wsQuery);
-    wsSnap.forEach(doc => {
-       workspaces.push(doc.data() as Workspace);
+    const workspaceSnapshots = await Promise.all(
+      workspaceIds.map(workspaceId => getDoc(doc(db, 'workspaces', workspaceId)))
+    );
+    workspaceSnapshots.forEach(workspaceSnapshot => {
+      if (workspaceSnapshot.exists()) {
+        workspaces.push({ ...workspaceSnapshot.data(), id: workspaceSnapshot.id } as Workspace);
+      }
     });
   }
 

@@ -11,6 +11,9 @@ test("production login contains no demo role picker, credentials or registration
   assert.doesNotMatch(authStore, /createUserWithEmailAndPassword|isSuperAdminEmail|setDoc\(/);
   assert.match(authStore, /has not been provisioned/);
   assert.match(authStore, /no active workspace membership/);
+  assert.match(authStore, /workspaceUsers', `\$\{workspaceId\}_\$\{firebaseUser\.uid\}`/);
+  assert.match(authStore, /getDoc\(doc\(db, 'workspaces', workspaceId\)\)/);
+  assert.doesNotMatch(authStore, /where\('id', 'in', workspaceIds\)/);
 });
 
 test("production server fails closed and exposes separate health endpoints", () => {
