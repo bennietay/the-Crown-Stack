@@ -145,7 +145,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
               set({ user: null, workspace: null, workspaces: [], workspaceRoles: {}, loading: false, error: err instanceof Error ? err.message : "Account access denied" });
             }
           } else {
-            set({ user: null, workspace: null, workspaces: [], workspaceRoles: {}, loading: false });
+            set({ user: null, workspace: null, workspaces: [], workspaceRoles: {}, loading: false, error: null });
           }
         });
         return () => {

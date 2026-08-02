@@ -63,6 +63,7 @@ function ApplicationRoutes() {
   const workspaceRoles = useAuthStore(state => state.workspaceRoles);
   const loading = useAuthStore(state => state.loading);
   const error = useAuthStore(state => state.error);
+  const clearError = useAuthStore(state => state.clearError);
 
   if (pathname === "/capture") return <LeadCapture />;
   if (pathname.startsWith("/p/")) return <ProposalView />;
@@ -72,8 +73,15 @@ function ApplicationRoutes() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
         <div className="w-full max-w-md space-y-3 rounded-xl border border-red-100 bg-white p-6 text-center shadow-lg">
-          <h1 className="text-xl font-bold text-slate-900">Configuration error</h1>
+          <h1 className="text-xl font-bold text-slate-900">Unable to open the workspace</h1>
           <p className="rounded-lg bg-slate-50 p-3 text-left text-sm text-slate-600">{error}</p>
+          <button
+            type="button"
+            onClick={clearError}
+            className="inline-flex min-h-11 items-center justify-center rounded-lg bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+          >
+            Return to sign in
+          </button>
         </div>
       </div>
     );

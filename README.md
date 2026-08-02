@@ -47,6 +47,8 @@ PUBLIC_TERMS_URL=
 
 Do not enter service secrets in the browser or commit them to Git. Online payments, email automation and WhatsApp API automation are not part of this release.
 
+Vite embeds every `VITE_*` value at build time. For a production Vercel release, deploy the source with `vercel deploy --prod` so the cloud Production variables are used. Do not deploy a local `--prebuilt` artifact unless its public Firebase project has been verified against the Firebase Admin service account; a stale `.env.local` will produce valid tokens for the wrong project and the API will reject them.
+
 ## First administrator
 
 Set `BOOTSTRAP_ADMIN_EMAIL` to the exact email address of the first administrator. After that account is created in Firebase Authentication, its first successful sign-in atomically creates the user, `ws-bennie` workspace and workspace membership. All other unprovisioned accounts remain denied.
