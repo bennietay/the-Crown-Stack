@@ -13,25 +13,54 @@ import {
 } from "lucide-react";
 import { useAuthStore } from "@/src/store/authStore";
 import { useDataStore } from "@/src/store/dataStore";
+import { useSettingsStore } from "@/src/store/settingsStore";
 import { cn } from "@/src/lib/utils";
 
 export function AppLayout({ children }: { children: ReactNode }) {
   const workspace = useAuthStore(state => state.workspace);
   const initWorkspace = useDataStore(state => state.initWorkspace);
+  const fetchSettings = useSettingsStore(state => state.fetchSettings);
+  const settingsLoading = useSettingsStore(state => state.loading);
+  const settingsError = useSettingsStore(state => state.error);
+  const loadedSettingsWorkspaceId = useSettingsStore(state => state.loadedWorkspaceId);
   const location = useLocation();
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     if (workspace?.id) {
-      return initWorkspace(workspace.id);
+      const unsubscribe = initWorkspace(workspace.id);
+      void fetchSettings(workspace.id);
+      return unsubscribe;
     }
-  }, [workspace?.id, initWorkspace]);
+  }, [workspace?.id, initWorkspace, fetchSettings]);
 
   // Close mobile drawer on route change
   useEffect(() => {
     setMobileMenuOpen(false);
   }, [location.pathname]);
+
+  if (workspace?.id && (settingsLoading || loadedSettingsWorkspaceId !== workspace.id)) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
+        <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm">
+          <h1 className="text-lg font-bold text-slate-900">{settingsError ? "Workspace settings unavailable" : "Loading workspace settings…"}</h1>
+          <p className="mt-2 text-sm text-slate-600">
+            {settingsError || "Preparing the current pricing, lead scoring and proposal rules."}
+          </p>
+          {settingsError ? (
+            <button
+              type="button"
+              onClick={() => void fetchSettings(workspace.id)}
+              className="mt-5 inline-flex min-h-11 items-center justify-center rounded-lg bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+            >
+              Retry settings
+            </button>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 font-sans text-slate-900">

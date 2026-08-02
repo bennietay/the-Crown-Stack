@@ -31,7 +31,9 @@ export interface AuthenticatedRequest extends Request {
 
 const getDb = () => {
   if (getApps().length > 0) {
-    return getFirestore();
+    return process.env.FIREBASE_DATABASE_ID
+      ? getFirestore(undefined, process.env.FIREBASE_DATABASE_ID)
+      : getFirestore();
   }
   return null;
 };

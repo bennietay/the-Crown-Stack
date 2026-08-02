@@ -51,3 +51,33 @@ test("server exposes only the supported production API surface", () => {
   assert.doesNotMatch(server, /\/api\/(ai|fulfilment|automation|customer-portal|reconciliation)/);
   assert.match(server, /app\.all\("\/api\/\*"/);
 });
+
+test("workspace settings load before operational pages and failed loads cannot be saved", () => {
+  const layout = read("src/components/layout/AppLayout.tsx");
+  const store = read("src/store/settingsStore.ts");
+  const settingsPage = read("src/pages/Settings.tsx");
+  assert.match(layout, /void fetchSettings\(workspace\.id\)/);
+  assert.match(layout, /loadedSettingsWorkspaceId !== workspace\.id/);
+  assert.match(store, /loadedWorkspaceId: null/);
+  assert.match(store, /loadedWorkspaceId !== workspaceId \|\| state\.error/);
+  assert.doesNotMatch(store, /Graceful fallback to default settings/);
+  assert.match(settingsPage, /disabled=\{saveStatus === 'saving' \|\| !settingsReady\}/);
+});
+
+test("proposal expiry and CSV import results use persisted outcomes", () => {
+  const leads = read("src/pages/Leads.tsx");
+  const customers = read("src/pages/Customers.tsx");
+  const importer = read("src/components/CsvImportModal.tsx");
+  assert.match(leads, /proposalValidityDays/);
+  assert.match(leads, /expiresAt:/);
+  assert.match(leads, /Promise\.allSettled/);
+  assert.match(customers, /Promise\.allSettled/);
+  assert.match(importer, /await onImport\(mappedRows\)/);
+  assert.doesNotMatch(importer, /setTimeout\(\(\) => \{\s*onImport/);
+});
+
+test("authorization uses the configured Firestore database", () => {
+  const middleware = read("src/server/authMiddleware.ts");
+  assert.match(middleware, /process\.env\.FIREBASE_DATABASE_ID/);
+  assert.match(middleware, /getFirestore\(undefined, process\.env\.FIREBASE_DATABASE_ID\)/);
+});

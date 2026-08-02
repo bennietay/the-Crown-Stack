@@ -59,6 +59,7 @@ interface SettingsState {
   settings: SystemSettings;
   loading: boolean;
   error: string | null;
+  loadedWorkspaceId: string | null;
   saveStatus: 'idle' | 'saving' | 'saved' | 'error';
   fetchSettings: (workspaceId: string) => Promise<void>;
   saveSettings: (workspaceId: string, updates: Partial<SystemSettings>) => Promise<void>;
@@ -69,6 +70,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   settings: DEFAULT_BENNIE_SETTINGS,
   loading: false,
   error: null,
+  loadedWorkspaceId: null,
   saveStatus: 'idle',
   
   fetchSettings: async (workspaceId: string) => {
@@ -77,16 +79,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     
     // Ensure instant rendering by populating fallback immediately if workspace changed
     if (!current || current.workspaceId !== workspaceId) {
-      set({ settings: defaultForWs, loading: true, error: null });
+      set({ settings: defaultForWs, loading: true, error: null, loadedWorkspaceId: null, saveStatus: 'idle' });
     } else {
-      set({ loading: true, error: null });
+      set({ loading: true, error: null, loadedWorkspaceId: null, saveStatus: 'idle' });
     }
 
     try {
       const user = auth.currentUser;
       if (!user) {
-        set({ loading: false });
-        return;
+        throw new Error('Authentication is required to load workspace settings.');
       }
       const token = await user.getIdToken();
       
@@ -97,14 +98,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       });
       
       if (!res.ok) {
-        throw new Error(await res.text());
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Settings could not be loaded (${res.status}).`);
       }
       
       const data = await res.json();
-      set({ settings: data, loading: false });
+      set({ settings: data, loading: false, error: null, loadedWorkspaceId: workspaceId });
     } catch (err: any) {
-      // Graceful fallback to default settings without blocking UI
-      set({ loading: false, error: null });
+      set({
+        loading: false,
+        loadedWorkspaceId: null,
+        error: err?.message || 'Settings could not be loaded. Retry before making changes.',
+      });
     }
   },
   
@@ -113,6 +118,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   saveSettings: async (workspaceId: string, updates: Partial<SystemSettings>) => {
+    const state = get();
+    if (state.loading || state.loadedWorkspaceId !== workspaceId || state.error) {
+      set({ saveStatus: 'error', error: state.error || 'Settings must finish loading before they can be saved.' });
+      return;
+    }
     set({ saveStatus: 'saving', error: null });
     
     const previousSettings = get().settings;

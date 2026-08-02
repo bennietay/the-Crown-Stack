@@ -36,14 +36,12 @@ export function Customers() {
     ["Bistro 88 Restaurant", "hello@bistro88.com", "inactive"]
   ];
 
-  const handleBatchImportCustomers = (rows: Record<string, any>[]) => {
+  const handleBatchImportCustomers = async (rows: Record<string, any>[]) => {
     if (!workspace) return;
-    let count = 0;
+    const validRows = rows.filter(row => row.name && row.email);
+    const results = await Promise.allSettled(validRows.map(row => {
 
-    rows.forEach(row => {
-      if (!row.name || !row.email) return;
-
-      addCustomer({
+      return addCustomer({
         workspaceId: workspace.id,
         name: row.name.trim(),
         email: row.email.trim(),
@@ -51,10 +49,11 @@ export function Customers() {
           ? row.status.toLowerCase()
           : "active",
       });
-      count++;
-    });
+    }));
 
-    alert(`Imported ${count} customer record(s) into "${workspace.name}".`);
+    const importedCount = results.filter(result => result.status === "fulfilled").length;
+    const failedCount = results.length - importedCount;
+    alert(`Imported ${importedCount} customer record(s) into "${workspace.name}".${failedCount ? ` ${failedCount} row(s) failed and were not counted.` : ""}`);
   };
 
   const [newCustomer, setNewCustomer] = useState({

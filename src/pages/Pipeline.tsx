@@ -13,7 +13,8 @@ export function Pipeline() {
   const { opportunities, updateOpportunity, addProposal } = useDataStore();
   const workspace = useAuthStore(state => state.workspace);
   const user = useAuthStore(state => state.user);
-  const currency = useSettingsStore(state => state.settings.business.currency);
+  const settings = useSettingsStore(state => state.settings);
+  const currency = settings.business.currency;
 
   const [selectedOpp, setSelectedOpp] = useState<Opportunity | null>(null);
   const [targetStage, setTargetStage] = useState<OpportunityStage | null>(null);
@@ -83,7 +84,7 @@ export function Pipeline() {
         totalMRC: mrcCharges,
         currency,
         token,
-        taxRate: 0,
+        taxRate: settings.sales.taxRate,
         pricing: {
           otcCharges,
           mrcCharges,
@@ -91,7 +92,7 @@ export function Pipeline() {
           deposit: Math.round(otcCharges * 0.5),
           paymentSchedule: "50% deposit upfront, 50% upon go-live",
         },
-        expiresAt: new Date(Date.now() + 14 * 86400000).toISOString(),
+        expiresAt: new Date(Date.now() + Math.max(1, settings.sales.proposalValidityDays || 14) * 86400000).toISOString(),
       });
       setCreatedProposalResult({ proposalId, token, publicUrl: `/p/${token}` });
     } catch (err: any) {

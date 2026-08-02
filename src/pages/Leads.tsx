@@ -66,19 +66,17 @@ export function Leads() {
     ["Example Contact", "contact@example.org", "+60 12-345 6789", "Example Organisation", "Lead Generation Website", "4000", "250", "cold", "Requested initial scope estimate"]
   ];
 
-  const handleBatchImportLeads = (rows: Record<string, any>[]) => {
+  const handleBatchImportLeads = async (rows: Record<string, any>[]) => {
     if (!workspace) return;
-    let importedCount = 0;
-
-    rows.forEach(row => {
-      if (!row.contactName || !row.email) return;
+    const validRows = rows.filter(row => row.contactName && row.email);
+    const results = await Promise.allSettled(validRows.map(row => {
 
       const otcVal = parseFloat(row.estimatedOtc) || 0;
       const mrcVal = parseFloat(row.estimatedMrc) || 0;
       const temp = (row.temperature || "warm").toLowerCase();
       const validTemp = ["hot", "warm", "cold"].includes(temp) ? (temp as "hot" | "warm" | "cold") : "warm";
 
-      addLead({
+      return addLead({
         workspaceId: workspace.id,
         contactName: row.contactName.trim(),
         email: row.email.trim(),
@@ -97,10 +95,11 @@ export function Leads() {
         }
       });
 
-      importedCount++;
-    });
+    }));
 
-    alert(`Imported ${importedCount} lead(s) into "${workspace.name}" for review.`);
+    const importedCount = results.filter(result => result.status === "fulfilled").length;
+    const failedCount = results.length - importedCount;
+    alert(`Imported ${importedCount} lead(s) into "${workspace.name}" for review.${failedCount ? ` ${failedCount} row(s) failed and were not counted.` : ""}`);
   };
 
   // CRUD Modal States
@@ -350,9 +349,10 @@ export function Leads() {
       status: "draft",
       totalOTC: option === "A" ? otcVal : 0,
       totalMRC: option === "B" ? mrcVal : 0,
-      taxRate: 0,
+      taxRate: settings.sales.taxRate,
       currency,
       token: uuidv4(),
+      expiresAt: new Date(Date.now() + Math.max(1, settings.sales.proposalValidityDays || 14) * 86400000).toISOString(),
     });
 
     await updateLead(selectedLead.id, { status: "proposal" });

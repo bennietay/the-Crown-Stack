@@ -34,7 +34,7 @@ interface CsvImportModalProps {
   templateFields: TemplateField[];
   sampleCsvFilename: string;
   sampleData: string[][];
-  onImport: (mappedRows: Record<string, any>[]) => void;
+  onImport: (mappedRows: Record<string, any>[]) => void | Promise<void>;
 }
 
 export function CsvImportModal({
@@ -140,7 +140,7 @@ export function CsvImportModal({
   };
 
   // Execute import mapping
-  const handleConfirmImport = () => {
+  const handleConfirmImport = async () => {
     if (!parsedResult || parsedResult.rows.length === 0) return;
 
     setImporting(true);
@@ -155,11 +155,15 @@ export function CsvImportModal({
       return item;
     });
 
-    setTimeout(() => {
-      onImport(mappedRows);
+    try {
+      await onImport(mappedRows);
       setImporting(false);
       onClose();
-    }, 400);
+    } catch (error) {
+      console.error("CSV import failed", error);
+      setImporting(false);
+      alert(error instanceof Error ? error.message : "The import could not be completed. No success was reported.");
+    }
   };
 
   // Validate required fields mapping

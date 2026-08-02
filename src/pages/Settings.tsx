@@ -27,18 +27,12 @@ type TabKey = "business" | "sales" | "leadGen" | "integrations";
 export function Settings() {
   const user = useAuthStore(state => state.user);
   const workspace = useAuthStore(state => state.workspace);
-  const { settings, loading, error, saveStatus, fetchSettings, saveSettings } = useSettingsStore();
+  const { settings, loading, error, loadedWorkspaceId, saveStatus, saveSettings } = useSettingsStore();
   const [activeTab, setActiveTab] = useState<TabKey>("business");
 
   // Initialize immediately from store or default to ensure zero loading lag
   const defaultForCurrentWs = { ...DEFAULT_BENNIE_SETTINGS, workspaceId: workspace?.id || DEFAULT_BENNIE_SETTINGS.workspaceId };
   const [localSettings, setLocalSettings] = useState<SystemSettings>(settings || defaultForCurrentWs);
-
-  useEffect(() => {
-    if (workspace?.id) {
-      fetchSettings(workspace.id);
-    }
-  }, [workspace?.id, fetchSettings]);
 
   useEffect(() => {
     if (settings) {
@@ -49,6 +43,7 @@ export function Settings() {
   }, [settings, workspace?.id]);
 
   const isAdmin = user?.role === "super_admin" || user?.role === "workspace_admin";
+  const settingsReady = !!workspace?.id && loadedWorkspaceId === workspace.id && !loading && !error;
 
   if (!isAdmin) {
     return (
@@ -133,7 +128,7 @@ export function Settings() {
               <AlertCircle className="w-4 h-4 mr-1.5 text-rose-600"/> {error || "Settings could not be saved"}
             </span>
           )}
-          <Button onClick={handleSave} disabled={saveStatus === 'saving'} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-4 py-2 rounded-lg shadow-xs transition-all">
+          <Button onClick={handleSave} disabled={saveStatus === 'saving' || !settingsReady} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-4 py-2 rounded-lg shadow-xs transition-all disabled:cursor-not-allowed disabled:opacity-50">
             {saveStatus === 'saving' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
             Save Configuration
           </Button>
