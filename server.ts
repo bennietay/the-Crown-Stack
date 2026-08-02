@@ -6,7 +6,6 @@ import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { z } from "zod";
-import { createServer as createViteServer } from "vite";
 import { calculateLeadScore, leadCaptureSchema } from "./src/lib/businessLogic";
 import { authenticateUser, AuthenticatedRequest, logAuditEvent, requireRole, requireWorkspace } from "./src/server/authMiddleware";
 
@@ -302,17 +301,17 @@ app.post("/api/capture", captureLimiter, async (req: AuthenticatedRequest, res) 
       score,
       assignedTo: settings.sales.defaultOwner || undefined,
       details: {
-        website: validated.website,
+        website: validated.website || "",
         service: validated.service,
         budget: validated.budget,
         timing: validated.timing,
-        message: validated.message,
-        source: validated.source,
-        utm_source: validated.utm_source,
-        utm_medium: validated.utm_medium,
-        utm_campaign: validated.utm_campaign,
-        utm_term: validated.utm_term,
-        utm_content: validated.utm_content,
+        message: validated.message || "",
+        source: validated.source || "",
+        utm_source: validated.utm_source || "",
+        utm_medium: validated.utm_medium || "",
+        utm_campaign: validated.utm_campaign || "",
+        utm_term: validated.utm_term || "",
+        utm_content: validated.utm_content || "",
       },
       createdAt: now,
       updatedAt: now,
@@ -498,7 +497,8 @@ if (isProduction) {
 }
 
 async function startLocalServer() {
-  if (!isProduction) {
+  if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
     app.use(vite.middlewares);
   }

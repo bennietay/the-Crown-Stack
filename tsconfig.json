@@ -23,5 +23,5 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "exclude": ["node_modules", "dist", "server.js", "server.cjs"]
+  "exclude": ["node_modules", "dist", "server.js", "server.cjs", "server.mjs"]
 }
