@@ -5,11 +5,11 @@ import { useDataStore } from "@/src/store/dataStore";
 import { Proposal } from "@/src/types";
 import { useAuthStore } from "@/src/store/authStore";
 import { useSettingsStore } from "@/src/store/settingsStore";
-import { ExternalLink, Copy, CheckCircle2 } from "lucide-react";
+import { ExternalLink, Copy, CheckCircle2, Pencil, Trash2, RefreshCw } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 
 export function Proposals() {
-  const { proposals, opportunities, products, addProposal, updateProposal } = useDataStore();
+  const { proposals, opportunities, products, addProposal, updateProposal, deleteProposal } = useDataStore();
   const workspace = useAuthStore(state => state.workspace);
   const settings = useSettingsStore(state => state.settings);
   const workspaceProposals = proposals.filter(p => p.workspaceId === workspace?.id);
@@ -19,6 +19,9 @@ export function Proposals() {
   const currency = settings?.business?.currency || 'USD';
 
   const [showAdd, setShowAdd] = useState(false);
+  const [editingProposal, setEditingProposal] = useState<Proposal | null>(null);
+  const [actionError, setActionError] = useState("");
+  const [saving, setSaving] = useState(false);
   const [copiedToken, setCopiedToken] = useState("");
   const [newProposal, setNewProposal] = useState({
     opportunityId: "",
@@ -59,8 +62,10 @@ export function Proposals() {
     setSelectedQty(1);
   };
 
-  const handleCreate = () => {
-    if (!workspace || !newProposal.opportunityId) return;
+  const handleCreate = async () => {
+    if (!workspace || !newProposal.opportunityId || newProposal.items.length === 0) return;
+    setSaving(true);
+    setActionError("");
     
     // calculate totals
     let totalOTC = 0;
@@ -76,25 +81,54 @@ export function Proposals() {
     const validityDays = settings?.sales?.proposalValidityDays || 30;
     const taxRate = settings?.sales?.taxRate || 0;
 
-    addProposal({
-      workspaceId: workspace.id,
-      opportunityId: newProposal.opportunityId,
-      items: newProposal.items,
-      status: "draft",
-      totalOTC,
-      totalMRC,
-      taxRate,
-      currency,
-      token: uuidv4(),
-      expiresAt: new Date(Date.now() + validityDays * 24 * 60 * 60 * 1000).toISOString()
-    });
-    setShowAdd(false);
-    setNewProposal({ opportunityId: "", items: [] });
+    try {
+      const payload = {
+        workspaceId: workspace.id,
+        opportunityId: newProposal.opportunityId,
+        items: newProposal.items,
+        status: editingProposal?.status || "draft",
+        totalOTC,
+        totalMRC,
+        taxRate,
+        currency,
+        token: editingProposal?.token || uuidv4(),
+        expiresAt: editingProposal?.expiresAt || new Date(Date.now() + validityDays * 24 * 60 * 60 * 1000).toISOString()
+      };
+      if (editingProposal) await updateProposal(editingProposal.id, payload);
+      else await addProposal(payload);
+      setShowAdd(false);
+      setEditingProposal(null);
+      setNewProposal({ opportunityId: "", items: [] });
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Proposal could not be saved.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const markReadyToShare = async (proposal: Proposal) => {
-    await updateProposal(proposal.id, { status: "sent" });
-    await copyLink(proposal.token);
+    try {
+      await updateProposal(proposal.id, { status: "sent" });
+      await copyLink(proposal.token);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Proposal could not be shared.");
+    }
+  };
+
+  const openEditor = (proposal: Proposal) => {
+    setEditingProposal(proposal);
+    setActionError("");
+    setNewProposal({ opportunityId: proposal.opportunityId, items: (proposal.items || []).map(item => ({ productId: item.productId, quantity: item.quantity })) });
+    setShowAdd(true);
+  };
+
+  const handleDelete = async (proposal: Proposal) => {
+    if (!window.confirm("Delete this proposal? This cannot be undone.")) return;
+    try {
+      await deleteProposal(proposal.id);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Proposal could not be deleted.");
+    }
   };
 
   const copyLink = async (token?: string) => {
@@ -112,12 +146,13 @@ export function Proposals() {
           <h2 className="text-2xl font-bold tracking-tight text-slate-800">Proposals</h2>
           <p className="text-sm text-slate-500">Prepare proposals, copy a secure link, and track customer decisions.</p>
         </div>
-        <Button onClick={() => setShowAdd(true)}>Create Proposal</Button>
+        <Button onClick={() => { setEditingProposal(null); setActionError(""); setNewProposal({ opportunityId: "", items: [] }); setShowAdd(true); }}>Create Proposal</Button>
       </div>
 
       <Card>
         <CardHeader>
           <CardTitle>Recent Proposals</CardTitle>
+          {actionError && <p role="alert" className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">{actionError}</p>}
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
@@ -160,6 +195,8 @@ export function Proposals() {
                             </a>
                           )}
                           {p.status === "draft" && <Button variant="ghost" size="sm" onClick={() => markReadyToShare(p)}>Ready & copy link</Button>}
+                          <Button variant="ghost" size="sm" title="Edit proposal" onClick={() => openEditor(p)}><Pencil className="w-4 h-4 text-slate-500" /></Button>
+                          <Button variant="ghost" size="sm" title="Delete proposal" onClick={() => void handleDelete(p)}><Trash2 className="w-4 h-4 text-rose-500" /></Button>
                         </div>
                       </td>
                     </tr>
@@ -182,8 +219,8 @@ export function Proposals() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
           <Card className="w-full max-w-2xl">
             <CardHeader>
-              <CardTitle>Create Fast Proposal</CardTitle>
-              <CardDescription>Select an opportunity and apply a quick template</CardDescription>
+              <CardTitle>{editingProposal ? "Amend Proposal" : "Create Fast Proposal"}</CardTitle>
+              <CardDescription>{editingProposal ? "Update the opportunity, products or quantities, then save the amended version." : "Select an opportunity and apply a quick template"}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-2">
@@ -232,7 +269,7 @@ export function Proposals() {
                     value={selectedQty}
                     onChange={e => setSelectedQty(parseInt(e.target.value) || 1)}
                   />
-                  <Button onClick={handleAddItem} variant="secondary">Add</Button>
+                <Button onClick={handleAddItem} variant="secondary">Add</Button>
                 </div>
                 
                 {newProposal.items.length > 0 && (
@@ -251,8 +288,8 @@ export function Proposals() {
               </div>
 
               <div className="flex justify-end space-x-2 pt-4 border-t border-slate-100">
-                <Button variant="outline" onClick={() => setShowAdd(false)}>Cancel</Button>
-                <Button onClick={handleCreate} disabled={!newProposal.opportunityId}>Save & Generate Token</Button>
+                <Button variant="outline" onClick={() => { setShowAdd(false); setEditingProposal(null); setActionError(""); }}>Cancel</Button>
+                <Button onClick={() => void handleCreate()} disabled={saving || !newProposal.opportunityId || newProposal.items.length === 0}>{saving ? <><RefreshCw className="mr-2 h-4 w-4 animate-spin" />Saving…</> : editingProposal ? "Save Amendment" : "Save & Generate Token"}</Button>
               </div>
             </CardContent>
           </Card>

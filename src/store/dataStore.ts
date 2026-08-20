@@ -36,6 +36,7 @@ interface DataState {
   addProduct: (product: Omit<Product, 'id'>) => Promise<void>;
   addProposal: (proposal: Omit<Proposal, 'id' | 'createdAt'>) => Promise<string>;
   updateProposal: (id: string, updates: Partial<Proposal>) => Promise<void>;
+  deleteProposal: (id: string) => Promise<void>;
 
   addCustomer: (customer: Omit<Customer, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
   updateCustomer: (id: string, updates: Partial<Customer>) => Promise<void>;
@@ -142,6 +143,11 @@ export const useDataStore = create<DataState>((set, get) => ({
   updateProposal: async (id, updates) => {
     if (!db) return;
     await updateDoc(doc(db, 'proposals', id), { ...updates });
+  },
+
+  deleteProposal: async (id) => {
+    if (!db) return;
+    await deleteDoc(doc(db, 'proposals', id));
   },
 
   addCustomer: async (customer) => {
