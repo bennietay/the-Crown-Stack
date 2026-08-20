@@ -33,6 +33,8 @@ test("lead capture requires a durable create response and has no fake CTA", () =
   assert.match(server, /res\.status\(201\)\.json\(\{ success: true, id: lead\.id \}\)/);
   assert.match(page, /utm_campaign/);
   assert.match(page, /Select a budget/);
+  assert.match(server, /leadCapture:\s*\{/);
+  assert.match(server, /settings\.leadCapture\.serviceOptions/);
 });
 
 test("package metadata uses the production application name", () => {
