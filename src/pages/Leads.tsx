@@ -44,6 +44,8 @@ export function Leads() {
   const [filterView, setFilterView] = useState("all");
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [activeDrawerTab, setActiveDrawerTab] = useState<"overview" | "qualification" | "closing">("overview");
+  const [proposalAction, setProposalAction] = useState<"A" | "B" | null>(null);
+  const [proposalError, setProposalError] = useState<string | null>(null);
 
   // CSV Import State
   const [isCsvImportOpen, setIsCsvImportOpen] = useState(false);
@@ -323,40 +325,49 @@ export function Leads() {
 
   const handleCreateProposalFromLead = async (option: "A" | "B") => {
     if (!selectedLead || !workspace) return;
-    const product = products.find(item => item.workspaceId === workspace.id && item.type === (option === "A" ? "otc" : "mrc"));
-    if (!product) {
-      alert(`Add a ${option === "A" ? "one-time" : "monthly recurring"} product in Products & Pricing before creating this proposal.`);
-      return;
+    setProposalAction(option);
+    setProposalError(null);
+    try {
+      const product = products.find(item => item.workspaceId === workspace.id && item.type === (option === "A" ? "otc" : "mrc"));
+      if (!product) {
+        throw new Error(`Add a ${option === "A" ? "one-time" : "monthly recurring"} product in Products & Pricing before creating this proposal.`);
+      }
+      const otcVal = option === "A" ? (selectedLead.closingOffer?.optionA?.otc || selectedLead.estimatedOtc || product.price) : 0;
+      const mrcVal = option === "B" ? (selectedLead.closingOffer?.optionB?.mrc || selectedLead.estimatedMrc || product.price) : 0;
+
+      const opportunityId = await addOpportunity({
+        workspaceId: workspace.id,
+        leadId: selectedLead.id,
+        name: selectedLead.companyName || selectedLead.contactName,
+        stage: "Solution proposed",
+        estimatedValue: option === "A" ? otcVal : mrcVal * 12,
+        currency,
+        probability: 50,
+        source: selectedLead.source || "lead",
+      });
+
+      await addProposal({
+        workspaceId: workspace.id,
+        opportunityId,
+        items: [{ productId: product.id, quantity: 1, type: product.type, price: option === "A" ? otcVal : mrcVal }],
+        status: "draft",
+        totalOTC: option === "A" ? otcVal : 0,
+        totalMRC: option === "B" ? mrcVal : 0,
+        taxRate: settings.sales.taxRate,
+        currency,
+        token: uuidv4(),
+        expiresAt: new Date(Date.now() + Math.max(1, settings.sales.proposalValidityDays || 14) * 86400000).toISOString(),
+      });
+
+      await updateLead(selectedLead.id, { status: "proposal" });
+      alert(`Draft ${option === "A" ? "one-off" : "monthly care"} proposal created. Review it in Proposals before sharing.`);
+      window.location.assign("/proposals");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The proposal could not be created.";
+      setProposalError(message);
+    } finally {
+      setProposalAction(null);
     }
-    const otcVal = option === "A" ? (selectedLead.closingOffer?.optionA?.otc || selectedLead.estimatedOtc || product.price) : 0;
-    const mrcVal = option === "B" ? (selectedLead.closingOffer?.optionB?.mrc || selectedLead.estimatedMrc || product.price) : 0;
-
-    const opportunityId = await addOpportunity({
-      workspaceId: workspace.id,
-      leadId: selectedLead.id,
-      name: selectedLead.companyName || selectedLead.contactName,
-      stage: "Solution proposed",
-      estimatedValue: option === "A" ? otcVal : mrcVal * 12,
-      currency,
-      probability: 50,
-      source: selectedLead.source || "lead",
-    });
-
-    await addProposal({
-      workspaceId: workspace.id,
-      opportunityId,
-      items: [{ productId: product.id, quantity: 1, type: product.type, price: option === "A" ? otcVal : mrcVal }],
-      status: "draft",
-      totalOTC: option === "A" ? otcVal : 0,
-      totalMRC: option === "B" ? mrcVal : 0,
-      taxRate: settings.sales.taxRate,
-      currency,
-      token: uuidv4(),
-      expiresAt: new Date(Date.now() + Math.max(1, settings.sales.proposalValidityDays || 14) * 86400000).toISOString(),
-    });
-
-    await updateLead(selectedLead.id, { status: "proposal" });
-    alert(`Draft ${option === "A" ? "one-off" : "monthly care"} proposal created. Review it before sharing.`);
   };
 
   return (
@@ -1024,8 +1035,8 @@ export function Leads() {
                       <Badge className="bg-blue-100 text-blue-800 border-blue-200">Option A: Custom Build</Badge>
                       <p className="text-xl font-extrabold text-slate-900">{selectedLead.closingOffer?.optionA?.otc || selectedLead.estimatedOtc ? money.format(selectedLead.closingOffer?.optionA?.otc || selectedLead.estimatedOtc || 0) : "Price from catalogue"} <span className="text-xs font-normal text-slate-500">one-time</span></p>
                       <p className="text-xs text-slate-600">Uses the first one-time product in Products & Pricing unless a lead-specific offer is recorded.</p>
-                      <Button className="w-full bg-slate-900 hover:bg-slate-800 text-white text-xs" onClick={() => handleCreateProposalFromLead("A")}>
-                        Create Option A Draft
+                      <Button className="w-full bg-slate-900 hover:bg-slate-800 text-white text-xs" disabled={proposalAction !== null} onClick={() => void handleCreateProposalFromLead("A")}>
+                        {proposalAction === "A" ? "Creating draft…" : "Create Option A Draft"}
                       </Button>
                     </div>
 
@@ -1034,11 +1045,16 @@ export function Leads() {
                       <Badge className="bg-indigo-100 text-indigo-800 border-indigo-200">Option B: Monthly Care</Badge>
                       <p className="text-xl font-extrabold text-indigo-900">{selectedLead.closingOffer?.optionB?.mrc || selectedLead.estimatedMrc ? money.format(selectedLead.closingOffer?.optionB?.mrc || selectedLead.estimatedMrc || 0) : "Price from catalogue"} <span className="text-xs font-normal text-slate-500">/month</span></p>
                       <p className="text-xs text-slate-600">Uses the first recurring product in Products & Pricing unless a lead-specific offer is recorded.</p>
-                      <Button className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs" onClick={() => handleCreateProposalFromLead("B")}>
-                        Create Option B Draft
+                      <Button className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs" disabled={proposalAction !== null} onClick={() => void handleCreateProposalFromLead("B")}>
+                        {proposalAction === "B" ? "Creating draft…" : "Create Option B Draft"}
                       </Button>
                     </div>
                   </div>
+                  {proposalError && (
+                    <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                      {proposalError}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
