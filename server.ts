@@ -149,7 +149,7 @@ app.use(helmet({
       scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "https:"],
-      connectSrc: ["'self'", "https://*.googleapis.com", "https://*.firebaseio.com", "wss://*.firebaseio.com", "https://*.supabase.co", "wss://*.supabase.co"],
+      connectSrc: ["'self'", "https://*.googleapis.com", "https://*.supabase.co", "wss://*.supabase.co"],
       frameSrc: ["'self'", "https://accounts.google.com"],
       objectSrc: ["'none'"],
       baseUri: ["'self'"],
