@@ -25,8 +25,7 @@ export function Login() {
     }
   }, []);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submitCredentials = async () => {
     setLoading(true);
     setError(null);
     setMessage(null);
@@ -37,6 +36,11 @@ export function Login() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await submitCredentials();
   };
 
   const handleGoogleSignIn = async () => {
@@ -204,7 +208,8 @@ export function Login() {
             </div>
 
             <Button
-              type="submit"
+              type="button"
+              onClick={() => void submitCredentials()}
               disabled={loading}
               className="w-full mt-2 bg-slate-900 hover:bg-slate-800 text-white font-medium h-12 rounded-xl shadow-sm transition-all"
             >
