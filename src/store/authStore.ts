@@ -136,7 +136,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       if (auth) {
         authUnsubscribe?.();
+        let resolved = false;
+        const bootstrapTimeout = window.setTimeout(() => {
+          if (!resolved) {
+            set({ loading: false, error: null });
+            console.warn("Firebase Auth bootstrap timed out; displaying sign-in instead of blocking the application.");
+          }
+        }, 8000);
         authUnsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+          resolved = true;
+          window.clearTimeout(bootstrapTimeout);
           if (firebaseUser) {
             try {
               const { userObj, workspaces, workspaceRoles } = await resolveUserRecord(firebaseUser);
@@ -159,6 +168,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           }
         });
         return () => {
+          window.clearTimeout(bootstrapTimeout);
           authUnsubscribe?.();
           authUnsubscribe = null;
         };

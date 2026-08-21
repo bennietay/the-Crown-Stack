@@ -1,0 +1,9 @@
+{
+  "projectId": "bennie-business-os-production",
+  "appId": "1:714248051182:web:45d2fe66575a520adf16ff",
+  "apiKey": "AIzaSyDgCRc4sUpP9QFl3j_ZCkTATIIV-jrhrWA",
+  "authDomain": "bennie-business-os-production.firebaseapp.com",
+  "firestoreDatabaseId": "(default)",
+  "storageBucket": "bennie-business-os-production.firebasestorage.app",
+  "messagingSenderId": "714248051182"
+}

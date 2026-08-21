@@ -20,7 +20,7 @@ if (!firebaseAdminReady) {
   try {
     const rawServiceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
     if (!rawServiceAccount) {
-      if (isProduction) throw new Error("FIREBASE_SERVICE_ACCOUNT_KEY is required in production.");
+      console.error("FIREBASE_SERVICE_ACCOUNT_KEY is required for production data operations; server will remain not-ready and protected operations will fail closed.");
     } else {
       const serviceAccount = JSON.parse(rawServiceAccount);
       initializeApp({
@@ -30,8 +30,10 @@ if (!firebaseAdminReady) {
       firebaseAdminReady = true;
     }
   } catch (error) {
-    if (isProduction) throw error;
-    console.warn("Development sandbox: Firebase Admin is unavailable and in-memory data will be used.");
+    firebaseAdminReady = false;
+    console.error(isProduction
+      ? "Firebase Admin initialization failed; server will remain not-ready and protected operations will fail closed."
+      : "Development sandbox: Firebase Admin initialization failed and in-memory data will be used.", error);
   }
 }
 

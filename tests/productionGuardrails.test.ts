@@ -19,7 +19,8 @@ test("production login contains no demo role picker, credentials or registration
 test("production server fails closed and exposes separate health endpoints", () => {
   const server = read("server.ts");
   assert.match(server, /Production startup refused: APP_MODE=live is required/);
-  assert.match(server, /FIREBASE_SERVICE_ACCOUNT_KEY is required in production/);
+  assert.match(server, /FIREBASE_SERVICE_ACCOUNT_KEY is required for production data operations/);
+  assert.match(server, /protected operations will fail closed/);
   assert.match(server, /app\.get\("\/healthz"/);
   assert.match(server, /app\.get\("\/readyz"/);
   assert.match(server, /app\.set\("trust proxy", 1\)/);
