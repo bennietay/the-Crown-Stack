@@ -70,21 +70,27 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   initAuth: () => {
     authUnsubscribe?.();
     let settled = false;
+    let hydrateVersion = 0;
     const timeout = window.setTimeout(() => {
       if (!settled) set({ loading: false, error: null });
     }, 8000);
     const hydrate = async (sessionUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> } | null) => {
+      const version = ++hydrateVersion;
       settled = true;
       window.clearTimeout(timeout);
       if (!sessionUser) {
+        if (version !== hydrateVersion) return;
         set({ user: null, workspace: null, workspaces: [], workspaceRoles: {}, loading: false, error: null });
         return;
       }
       try {
         const resolved = await resolveUserRecord(sessionUser);
+        if (version !== hydrateVersion) return;
         set({ ...resolved, workspace: resolved.workspaces[0] || null, loading: false, error: null });
       } catch (error) {
-        await supabase.auth.signOut().catch(() => undefined);
+        if (version !== hydrateVersion) return;
+        // Keep the Supabase session intact on hydration failures. A transient
+        // RLS/network error should be retryable instead of forcing a logout.
         set({ user: null, workspace: null, workspaces: [], workspaceRoles: {}, loading: false, error: error instanceof Error ? error.message : 'Account access denied' });
       }
     };
