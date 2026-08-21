@@ -2,8 +2,7 @@ import { useState, useEffect } from "react";
 import { useAuthStore } from "@/src/store/authStore";
 import { Button } from "@/src/components/ui/button";
 import { Mail, Lock, AlertCircle, CheckCircle2, ArrowRight, ExternalLink } from "lucide-react";
-import { sendPasswordResetEmail } from "firebase/auth";
-import { auth } from "@/src/firebase";
+import { supabase } from "@/src/supabase";
 
 export function Login() {
   const googleAuthEnabled = import.meta.env.VITE_GOOGLE_AUTH_ENABLED === "true";
@@ -55,7 +54,7 @@ export function Login() {
       if (err.code === "auth/popup-closed-by-user") {
         friendlyError = "Sign-in popup was closed before completing.";
       } else if (err.code === "auth/unauthorized-domain") {
-        friendlyError = "This domain is not authorized for Google Sign-In in Firebase. Please add it to your Firebase Auth settings.";
+        friendlyError = "This domain is not authorized for Google Sign-In in Supabase. Add it to the Supabase Auth redirect configuration.";
       } else if (err.code === "auth/popup-blocked") {
          friendlyError = "Sign-in popup was blocked by your browser. Please allow popups or open the app in a new tab.";
       }
@@ -71,11 +70,11 @@ export function Login() {
       return;
     }
     try {
-      if (auth) {
-        await sendPasswordResetEmail(auth, email);
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+      if (!resetError) {
         setMessage("Password reset email sent. Please check your inbox.");
         setError(null);
-      }
+      } else throw resetError;
     } catch (err: any) {
       setError(err.message);
     }

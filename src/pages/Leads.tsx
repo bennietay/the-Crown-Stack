@@ -4,6 +4,7 @@ import { Button } from "@/src/components/ui/button";
 import { Badge } from "@/src/components/ui/badge";
 import { useDataStore } from "@/src/store/dataStore";
 import { useAuthStore } from "@/src/store/authStore";
+import { supabaseWorkspaceId } from "@/src/supabase";
 import { format, isBefore, isToday, parseISO } from "date-fns";
 import { 
   X, 
@@ -186,7 +187,7 @@ export function Leads() {
     }
 
     addLead({
-      workspaceId: workspace?.id || "ws-bennie",
+      workspaceId: workspace?.id || supabaseWorkspaceId,
       contactName: formData.contactName,
       email: formData.email,
       phone: formData.phone,

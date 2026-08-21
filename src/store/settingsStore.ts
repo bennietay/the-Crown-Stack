@@ -1,9 +1,9 @@
 import { create } from 'zustand';
-import { auth } from '../firebase';
+import { supabase, supabaseWorkspaceId } from '../supabase';
 import { SystemSettings } from '../types';
 
 export const DEFAULT_BENNIE_SETTINGS: SystemSettings = {
-  workspaceId: 'ws-bennie',
+  workspaceId: supabaseWorkspaceId,
   business: {
     name: 'Bennie Studio',
     currency: 'MYR',
@@ -48,7 +48,7 @@ export const DEFAULT_BENNIE_SETTINGS: SystemSettings = {
     { day: 7, channel: 'email', title: 'Send Case Studies & Testimonials' },
   ],
   integrations: {
-    firebaseConfigured: false,
+    supabaseConfigured: false,
     whatsappConfigured: false,
   },
   updatedAt: new Date().toISOString(),
@@ -85,25 +85,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
 
     try {
-      const user = auth.currentUser;
-      if (!user) {
-        throw new Error('Authentication is required to load workspace settings.');
-      }
-      const token = await user.getIdToken();
-      
-      const res = await fetch(`/api/settings/${workspaceId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Settings could not be loaded (${res.status}).`);
-      }
-      
-      const data = await res.json();
-      set({ settings: data, loading: false, error: null, loadedWorkspaceId: workspaceId });
+      const { data, error } = await supabase.from('bos_records').select('data').match({ workspace_id: workspaceId, collection_name: 'settings', record_id: workspaceId, is_soft_deleted: false }).maybeSingle();
+      if (error) throw error;
+      const loaded = data?.data ? { ...defaultForWs, ...data.data, workspaceId } : defaultForWs;
+      set({ settings: loaded, loading: false, error: null, loadedWorkspaceId: workspaceId });
     } catch (err: any) {
       set({
         loading: false,
@@ -130,25 +115,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ settings: updated as SystemSettings });
 
     try {
-      const user = auth.currentUser;
-      if (!user) {
-        throw new Error("Authentication required to update settings");
-      }
-      
-      const token = await user.getIdToken();
-      const res = await fetch(`/api/settings/${workspaceId}`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(updates)
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({ error: "Failed to update settings" }));
-        throw new Error(errData.error || `Server error (${res.status})`);
-      }
+      const { error } = await supabase.from('bos_records').upsert({ workspace_id: workspaceId, collection_name: 'settings', record_id: workspaceId, data: updated, is_soft_deleted: false, updated_at: new Date().toISOString() }, { onConflict: 'workspace_id,collection_name,record_id' });
+      if (error) throw error;
       
       set({ saveStatus: 'saved', error: null });
       setTimeout(() => set({ saveStatus: 'idle' }), 3000);

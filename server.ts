@@ -3,11 +3,10 @@ import path from "path";
 import express from "express";
 import helmet from "helmet";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
-import { cert, getApps, initializeApp } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
 import { z } from "zod";
 import { calculateLeadScore, leadCaptureSchema } from "./src/lib/businessLogic";
 import { authenticateUser, AuthenticatedRequest, logAuditEvent, requireRole, requireWorkspace } from "./src/server/authMiddleware";
+import { createSupabaseRequestClient, supabaseServer, supabaseServerUrl, supabaseWorkspaceId } from "./src/server/supabase";
 
 const isProduction = process.env.NODE_ENV === "production";
 const appMode = process.env.APP_MODE || (isProduction ? "" : "demo");
@@ -15,34 +14,8 @@ const appMode = process.env.APP_MODE || (isProduction ? "" : "demo");
 if (!['live', 'demo'].includes(appMode)) throw new Error("APP_MODE must be either live or demo.");
 if (isProduction && appMode !== "live") throw new Error("Production startup refused: APP_MODE=live is required.");
 
-let firebaseAdminReady = getApps().length > 0;
-if (!firebaseAdminReady) {
-  try {
-    const rawServiceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
-    if (!rawServiceAccount) {
-      console.error("FIREBASE_SERVICE_ACCOUNT_KEY is required for production data operations; server will remain not-ready and protected operations will fail closed.");
-    } else {
-      const serviceAccount = JSON.parse(rawServiceAccount);
-      initializeApp({
-        credential: cert(serviceAccount),
-        projectId: serviceAccount.project_id,
-      });
-      firebaseAdminReady = true;
-    }
-  } catch (error) {
-    firebaseAdminReady = false;
-    console.error(isProduction
-      ? "Firebase Admin initialization failed; server will remain not-ready and protected operations will fail closed."
-      : "Development sandbox: Firebase Admin initialization failed and in-memory data will be used.", error);
-  }
-}
-
-const getDb = () => {
-  if (!firebaseAdminReady) return null;
-  return process.env.FIREBASE_DATABASE_ID
-    ? getFirestore(undefined, process.env.FIREBASE_DATABASE_ID)
-    : getFirestore();
-};
+const supabaseReady = Boolean(supabaseServer);
+const publicProposalFunctionUrl = `${supabaseServerUrl}/functions/v1/public-proposal`;
 
 const developmentLeads: any[] = [];
 const developmentSettings: Record<string, any> = {};
@@ -91,7 +64,7 @@ const getDefaultSettings = (workspaceId: string) => ({
     { day: 5, channel: "call", title: "Schedule discovery call" },
   ],
   integrations: {
-    firebaseConfigured: firebaseAdminReady,
+    supabaseConfigured: supabaseReady,
     whatsappConfigured: false,
   },
   updatedAt: new Date().toISOString(),
@@ -155,10 +128,8 @@ const settingsSchema = z.object({
 
 async function readSettings(workspaceId: string) {
   let settings = mergeSettings(getDefaultSettings(workspaceId), developmentSettings[workspaceId]);
-  const db = getDb();
-  if (!db) return settings;
-  const snapshot = await db.collection("systemSettings").doc(workspaceId).get();
-  if (snapshot.exists) settings = mergeSettings(settings, snapshot.data());
+  const { data, error } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "settings", record_id: workspaceId, is_soft_deleted: false }).maybeSingle();
+  if (!error && data?.data) settings = mergeSettings(settings, data.data);
   return settings;
 }
 
@@ -200,7 +171,7 @@ app.use(express.json({ limit: "256kb" }));
 
 app.get("/healthz", (_req, res) => res.status(200).json({ status: "alive", timestamp: new Date().toISOString() }));
 app.get("/readyz", (_req, res) => {
-  const ready = firebaseAdminReady && (!isProduction || appMode === "live");
+  const ready = supabaseReady && (!isProduction || appMode === "live");
   res.status(ready ? 200 : 503).json({ status: ready ? "ready" : "not_ready" });
 });
 
@@ -211,45 +182,16 @@ app.post("/api/bootstrap", authenticateUser, async (req: AuthenticatedRequest, r
     return res.status(403).json({ error: "This account has not been invited." });
   }
 
-  const db = getDb();
-  if (!db || !req.user) return res.status(503).json({ error: "Account provisioning is temporarily unavailable." });
-
-  const userRef = db.collection("users").doc(req.user.uid);
-  const workspaceRef = db.collection("workspaces").doc("ws-bennie");
-  const membershipRef = db.collection("workspaceUsers").doc(`ws-bennie_${req.user.uid}`);
-  const existingUser = await userRef.get();
-  if (existingUser.exists) return res.status(409).json({ status: "already_provisioned" });
-
+  if (!req.user) return res.status(503).json({ error: "Account provisioning is temporarily unavailable." });
+  const token = String(req.headers.authorization).slice("Bearer ".length);
+  const client = createSupabaseRequestClient(token);
   const now = new Date().toISOString();
-  const batch = db.batch();
-  batch.set(userRef, {
-    id: req.user.uid,
-    email,
-    name: email.split("@")[0],
-    role: "workspace_admin",
-    workspaceIds: ["ws-bennie"],
-    activeWorkspaceId: "ws-bennie",
-    createdAt: now,
-    updatedAt: now,
-  });
-  batch.set(workspaceRef, {
-    id: "ws-bennie",
-    name: "Bennie Studio",
-    type: "agency",
-    createdAt: now,
-    updatedAt: now,
-  }, { merge: true });
-  batch.set(membershipRef, {
-    workspaceId: "ws-bennie",
-    userId: req.user.uid,
-    role: "workspace_admin",
-    status: "active",
-    createdAt: now,
-    updatedAt: now,
-  });
-  await batch.commit();
+  const { error: profileError } = await client.from("bos_profiles").upsert({ id: req.user.uid, email, display_name: email.split("@")[0], updated_at: now }, { onConflict: "id" });
+  const { error: workspaceError } = await client.from("bos_workspaces").upsert({ id: supabaseWorkspaceId, owner_id: req.user.uid, name: "Bennie Studio", settings: { dailyTarget: 30, marketAllocation: { MY: 10, SG: 10, UK: 10 } }, updated_at: now }, { onConflict: "id" });
+  const { error: memberError } = await client.from("bos_workspace_members").upsert({ workspace_id: supabaseWorkspaceId, user_id: req.user.uid, role: "workspace_admin", status: "active", updated_at: now }, { onConflict: "workspace_id,user_id" });
+  if (profileError || workspaceError || memberError) return res.status(503).json({ error: "Account provisioning is temporarily unavailable." });
   await logAuditEvent({
-    workspaceId: "ws-bennie",
+    workspaceId: supabaseWorkspaceId,
     userId: req.user.uid,
     userEmail: email,
     action: "bootstrap_admin",
@@ -265,10 +207,9 @@ app.post("/api/bootstrap", authenticateUser, async (req: AuthenticatedRequest, r
 app.post("/api/capture", captureLimiter, async (req: AuthenticatedRequest, res) => {
   try {
     const validated = leadCaptureSchema.parse(req.body);
-    const workspaceId = "ws-bennie";
+    const workspaceId = supabaseWorkspaceId;
     const settings = await readSettings(workspaceId);
-    const db = getDb();
-    if (!db && isProduction) return res.status(503).json({ error: "Lead capture is temporarily unavailable" });
+    if (!supabaseReady) return res.status(503).json({ error: "Lead capture is temporarily unavailable" });
 
     if (!settings.leadCapture.serviceOptions.includes(validated.service)) {
       return res.status(400).json({ error: "Validation failed", details: [{ path: ["service"], message: "Choose a valid service" }] });
@@ -318,32 +259,9 @@ app.post("/api/capture", captureLimiter, async (req: AuthenticatedRequest, res) 
       createdAt: now,
       updatedAt: now,
     };
-    if (db) {
-      const batch = db.batch();
-      batch.set(db.collection("leads").doc(lead.id), lead);
-      for (const step of settings.cadence || []) {
-        const taskId = `task-${crypto.randomUUID()}`;
-        const dueDate = new Date();
-        dueDate.setDate(dueDate.getDate() + step.day);
-        batch.set(db.collection("tasks").doc(taskId), {
-          id: taskId,
-          workspaceId,
-          leadId: lead.id,
-          title: step.title,
-          channel: step.channel,
-          category: "revenue",
-          reason: `New enquiry from ${lead.contactName}`,
-          recommendedAction: step.title,
-          contactName: lead.contactName,
-          companyName: lead.companyName,
-          dueDate: dueDate.toISOString(),
-          status: "pending",
-          owner: lead.assignedTo || "unassigned",
-          createdAt: now,
-        });
-      }
-      await batch.commit();
-    } else developmentLeads.push(lead);
+    const records = [{ workspace_id: workspaceId, collection_name: "leads", record_id: lead.id, data: lead, is_soft_deleted: false, updated_at: now }];
+    const { error: leadWriteError } = await supabaseServer.from("bos_records").upsert(records, { onConflict: "workspace_id,collection_name,record_id" });
+    if (leadWriteError) return res.status(503).json({ error: "Lead capture is temporarily unavailable" });
 
     await logAuditEvent({ workspaceId, userId: "public_lead_form", userEmail: lead.email, action: "lead_captured", resourceType: "lead", resourceId: lead.id, after: { score, temperature, service: validated.service }, requestId: req.requestId });
     return res.status(201).json({ success: true, id: lead.id });
@@ -355,7 +273,7 @@ app.post("/api/capture", captureLimiter, async (req: AuthenticatedRequest, res) 
 });
 
 app.get("/api/settings/:workspaceId/public", async (req, res) => {
-  if (req.params.workspaceId !== "ws-bennie") return res.status(404).json({ error: "Workspace not found" });
+  if (req.params.workspaceId !== supabaseWorkspaceId) return res.status(404).json({ error: "Workspace not found" });
   try {
     const settings = await readSettings("ws-bennie");
     return res.json({
@@ -378,7 +296,7 @@ app.get("/api/settings/:workspaceId", authenticateUser, requireWorkspace(), requ
   try {
     const settings = await readSettings(req.workspaceId!);
     settings.integrations = {
-      firebaseConfigured: firebaseAdminReady,
+      supabaseConfigured: supabaseReady,
       whatsappConfigured: !!process.env.PUBLIC_WHATSAPP_URL,
       lastVerified: new Date().toISOString(),
     };
@@ -398,13 +316,8 @@ app.put("/api/settings/:workspaceId", authenticateUser, requireWorkspace(), requ
     updates.updatedAt = new Date().toISOString();
     updates.updatedBy = req.user!.uid;
     updates.integrations = {};
-    const db = getDb();
-    if (!db) {
-      if (isProduction) return res.status(503).json({ error: "Settings storage is unavailable" });
-      developmentSettings[workspaceId] = updates;
-    } else {
-      await db.collection("systemSettings").doc(workspaceId).set(updates);
-    }
+    const { error } = await supabaseServer.from("bos_records").upsert({ workspace_id: workspaceId, collection_name: "settings", record_id: workspaceId, data: updates, is_soft_deleted: false, updated_at: updates.updatedAt }, { onConflict: "workspace_id,collection_name,record_id" });
+    if (error) return res.status(503).json({ error: "Settings storage is unavailable" });
     await logAuditEvent({ workspaceId, userId: req.user!.uid, userEmail: req.user!.email, action: "settings_updated", resourceType: "systemSettings", resourceId: workspaceId, requestId: req.requestId });
     return res.json({ success: true, settings: updates });
   } catch (error) {
@@ -416,23 +329,25 @@ app.put("/api/settings/:workspaceId", authenticateUser, requireWorkspace(), requ
 
 app.get("/api/proposals/public/:token", async (req, res) => {
   try {
-    const db = getDb();
-    if (!db) return res.status(503).json({ error: "Proposal service is unavailable" });
-    const snapshot = await db.collection("proposals").where("token", "==", req.params.token).limit(1).get();
-    if (snapshot.empty) return res.status(404).json({ error: "Proposal not found or no longer available" });
-    const proposalDoc = snapshot.docs[0];
-    const proposal = proposalDoc.data();
+    const edgeResponse = await fetch(`${publicProposalFunctionUrl}?token=${encodeURIComponent(req.params.token)}`);
+    return res.status(edgeResponse.status).json(await edgeResponse.json());
+    /* Legacy implementation retained below for rollback reference. */
+    /* istanbul ignore next */
+    const { data: rows, error } = await supabaseServer.from("bos_records").select("record_id,data").eq("workspace_id", supabaseWorkspaceId).eq("collection_name", "proposals").eq("is_soft_deleted", false);
+    if (error) throw error;
+    const row = (rows || []).find(item => item.data?.token === req.params.token);
+    if (!row) return res.status(404).json({ error: "Proposal not found or no longer available" });
+    const proposal = row.data as any;
     if (!['sent', 'accepted'].includes(String(proposal.status).toLowerCase())) return res.status(404).json({ error: "Proposal not found or no longer available" });
     if (proposal.expiresAt && new Date(proposal.expiresAt).getTime() < Date.now()) return res.status(410).json({ error: "This proposal has expired" });
 
     const productIds = Array.from(new Set((proposal.items || []).map((item: any) => item.productId).filter(Boolean))) as string[];
-    const products = await Promise.all(productIds.map(async id => {
-      const product = await db.collection("products").doc(id).get();
-      return product.exists ? { id: product.id, ...product.data() } : { id, name: "Custom service" };
-    }));
+    const { data: productRows } = await supabaseServer.from("bos_records").select("record_id,data").eq("workspace_id", supabaseWorkspaceId).eq("collection_name", "products").in("record_id", productIds);
+    const products = productIds.map(id => { const product = (productRows || []).find(item => item.record_id === id); return product ? { id, ...(product.data as any) } : { id, name: "Custom service" }; });
     const now = new Date().toISOString();
-    await proposalDoc.ref.update({ viewsCount: Number(proposal.viewsCount || 0) + 1, firstViewedAt: proposal.firstViewedAt || now, lastViewedAt: now });
-    return res.json({ success: true, proposal: { id: proposalDoc.id, ...proposal }, products });
+    const viewedProposal = { ...proposal, viewsCount: Number(proposal.viewsCount || 0) + 1, firstViewedAt: proposal.firstViewedAt || now, lastViewedAt: now };
+    await supabaseServer.from("bos_records").update({ data: viewedProposal, updated_at: now }).match({ workspace_id: supabaseWorkspaceId, collection_name: "proposals", record_id: row.record_id });
+    return res.json({ success: true, proposal: { id: row.record_id, ...viewedProposal }, products });
   } catch (error) {
     console.error("Proposal read failed", error);
     return res.status(500).json({ error: "Failed to load proposal" });
@@ -449,24 +364,27 @@ const acceptanceSchema = z.object({
 
 app.post("/api/proposals/public/:token/accept", acceptanceLimiter, async (req, res) => {
   try {
+    const edgeResponse = await fetch(`${publicProposalFunctionUrl}?token=${encodeURIComponent(req.params.token)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(req.body) });
+    return res.status(edgeResponse.status).json(await edgeResponse.json());
+    /* Legacy implementation retained below for rollback reference. */
+    /* istanbul ignore next */
     const acceptance = acceptanceSchema.parse(req.body);
-    const db = getDb();
-    if (!db) return res.status(503).json({ error: "Proposal service is unavailable" });
-    const snapshot = await db.collection("proposals").where("token", "==", req.params.token).limit(1).get();
-    if (snapshot.empty) return res.status(404).json({ error: "Proposal not found or no longer available" });
-    const proposalDoc = snapshot.docs[0];
-    const proposal = proposalDoc.data();
+    const { data: rows, error } = await supabaseServer.from("bos_records").select("record_id,data").eq("workspace_id", supabaseWorkspaceId).eq("collection_name", "proposals").eq("is_soft_deleted", false);
+    if (error) throw error;
+    const proposalRow = (rows || []).find(item => item.data?.token === req.params.token);
+    if (!proposalRow) return res.status(404).json({ error: "Proposal not found or no longer available" });
+    const proposal = proposalRow.data as any;
     if (String(proposal.status).toLowerCase() !== "sent") return res.status(409).json({ error: "This proposal is not awaiting acceptance" });
     if (proposal.expiresAt && new Date(proposal.expiresAt).getTime() < Date.now()) return res.status(410).json({ error: "This proposal has expired" });
 
     const acceptedAt = new Date().toISOString();
     const userAgent = String(req.headers["user-agent"] || "");
     const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "");
-    const evidence = JSON.stringify({ proposalId: proposalDoc.id, ...acceptance, acceptedAt, userAgent, ip });
-    const acceptanceRef = db.collection("proposalAcceptances").doc();
+    const evidence = JSON.stringify({ proposalId: proposalRow.record_id, ...acceptance, acceptedAt, userAgent, ip });
+    const acceptanceId = `accept-${crypto.randomUUID()}`;
     const acceptanceRecord = {
-      id: acceptanceRef.id,
-      proposalId: proposalDoc.id,
+      id: acceptanceId,
+      proposalId: proposalRow.record_id,
       proposalVersion: proposal.version || 1,
       ...acceptance,
       acceptedAt,
@@ -475,12 +393,11 @@ app.post("/api/proposals/public/:token/accept", acceptanceLimiter, async (req, r
       ipHash: crypto.createHash("sha256").update(ip).digest("hex"),
       acceptanceEvidenceHash: crypto.createHash("sha256").update(evidence).digest("hex"),
     };
-    await db.runTransaction(async transaction => {
-      const current = await transaction.get(proposalDoc.ref);
-      if (String(current.data()?.status).toLowerCase() !== "sent") throw new Error("Proposal is no longer awaiting acceptance");
-      transaction.set(acceptanceRef, acceptanceRecord);
-      transaction.update(proposalDoc.ref, { status: "accepted", decisionDate: acceptedAt, updatedAt: acceptedAt });
-    });
+    const { error: acceptanceError } = await supabaseServer.from("bos_records").upsert([
+      { workspace_id: supabaseWorkspaceId, collection_name: "proposal_acceptances", record_id: acceptanceId, data: acceptanceRecord, is_soft_deleted: false, updated_at: acceptedAt },
+      { workspace_id: supabaseWorkspaceId, collection_name: "proposals", record_id: proposalRow.record_id, data: { ...proposal, status: "accepted", decisionDate: acceptedAt, updatedAt: acceptedAt }, is_soft_deleted: false, updated_at: acceptedAt },
+    ], { onConflict: "workspace_id,collection_name,record_id" });
+    if (acceptanceError) throw acceptanceError;
     return res.json({ success: true, acceptanceRecord });
   } catch (error: any) {
     if (error instanceof z.ZodError) return res.status(400).json({ error: "Complete all signatory details and confirmations" });

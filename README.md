@@ -3,8 +3,8 @@
 Bennie Business OS is Bennie Studio's focused revenue workspace. The production surface supports:
 
 - a public, conversion-focused project enquiry form;
-- invitation-only Firebase Authentication;
-- Firestore-backed leads, pipeline, products, proposals, customers, tickets and follow-up tasks;
+- invitation-only Supabase Auth;
+- Supabase Postgres/RLS-backed leads, pipeline, products, proposals, customers, tickets and follow-up tasks;
 - secure public proposal links with durable acceptance records;
 - advanced business, pricing, lead-form and provider-readiness settings.
 
@@ -19,7 +19,7 @@ npm test
 npm run build
 ```
 
-For local UI development, use `APP_MODE=demo`. Production requires `APP_MODE=live` and refuses to start without Firebase Admin credentials.
+For local UI development, use `APP_MODE=demo`. Production requires `APP_MODE=live` and a Supabase project configuration.
 
 ## Production environment
 
@@ -28,12 +28,12 @@ Copy `.env.example` into your deployment environment. Required server-side value
 ```env
 NODE_ENV=production
 APP_MODE=live
-FIREBASE_SERVICE_ACCOUNT_KEY={...service account JSON...}
-VITE_FIREBASE_API_KEY=...
-VITE_FIREBASE_AUTH_DOMAIN=...
-VITE_FIREBASE_PROJECT_ID=...
-VITE_FIREBASE_MESSAGING_SENDER_ID=...
-VITE_FIREBASE_APP_ID=...
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+SUPABASE_WORKSPACE_ID=ws-...
+VITE_SUPABASE_URL=https://<project-ref>.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+VITE_SUPABASE_WORKSPACE_ID=ws-...
 ```
 
 Recommended free-first public configuration:
@@ -47,19 +47,17 @@ PUBLIC_TERMS_URL=
 
 Do not enter service secrets in the browser or commit them to Git. Online payments, email automation and WhatsApp API automation are not part of this release.
 
-Vite embeds every `VITE_*` value at build time. For a production Vercel release, deploy the source with `vercel deploy --prod` so the cloud Production variables are used. Do not deploy a local `--prebuilt` artifact unless its public Firebase project has been verified against the Firebase Admin service account; a stale `.env.local` will produce valid tokens for the wrong project and the API will reject them.
+Vite embeds every `VITE_*` value at build time. Never expose a Supabase service-role key in browser code; the publishable key is protected by RLS. For a production Vercel release, deploy the source with `vercel deploy --prod` so the cloud Production variables are used.
 
 ## First administrator
 
-Set `BOOTSTRAP_ADMIN_EMAIL` to the exact email address of the first administrator. After that account is created in Firebase Authentication, its first successful sign-in atomically creates the user, `ws-bennie` workspace and workspace membership. All other unprovisioned accounts remain denied.
-
-Use Firebase's default Firestore database to keep the architecture aligned with the free-first plan. Deploy `firestore.rules` before inviting additional users, and add the final Vercel domain to Firebase Authentication's authorized domains.
+Set `BOOTSTRAP_ADMIN_EMAIL` to the exact email address of the first administrator. Supabase Auth users must have an active row in `bos_workspace_members` for the configured workspace.
 
 ## Release gates
 
 1. All lint, tests and production builds pass.
 2. `/healthz` and `/readyz` return 200 in the deployed environment.
-3. A real `/capture` submission appears in the `leads` Firestore collection.
-4. An invited administrator can sign in and access only `ws-bennie`.
+3. A real `/capture` submission appears in the Supabase `bos_records` leads collection.
+4. An invited administrator can sign in and access only the configured Supabase workspace.
 5. A draft proposal can be marked ready, opened through its public link and accepted.
 6. Preview is reviewed before production promotion.

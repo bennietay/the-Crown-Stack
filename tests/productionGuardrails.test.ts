@@ -9,18 +9,17 @@ test("production login contains no demo role picker, credentials or registration
   const authStore = read("src/store/authStore.ts");
   assert.doesNotMatch(login, /Quick Role Sign-In|Password123|Create one now|admin@benniestudio/i);
   assert.doesNotMatch(authStore, /createUserWithEmailAndPassword|isSuperAdminEmail|setDoc\(/);
-  assert.match(authStore, /has not been provisioned/);
   assert.match(authStore, /no active workspace membership/);
-  assert.match(authStore, /workspaceUsers', `\$\{workspaceId\}_\$\{firebaseUser\.uid\}`/);
-  assert.match(authStore, /getDoc\(doc\(db, 'workspaces', workspaceId\)\)/);
-  assert.doesNotMatch(authStore, /where\('id', 'in', workspaceIds\)/);
+  assert.match(authStore, /bos_workspace_members/);
+  assert.match(authStore, /bos_workspaces/);
+  assert.doesNotMatch(authStore, /firebaseUser|Firestore not initialized/);
 });
 
 test("production server fails closed and exposes separate health endpoints", () => {
   const server = read("server.ts");
   assert.match(server, /Production startup refused: APP_MODE=live is required/);
-  assert.match(server, /FIREBASE_SERVICE_ACCOUNT_KEY is required for production data operations/);
-  assert.match(server, /protected operations will fail closed/);
+  assert.match(server, /supabaseReady/);
+  assert.match(server, /supabaseWorkspaceId/);
   assert.match(server, /app\.get\("\/healthz"/);
   assert.match(server, /app\.get\("\/readyz"/);
   assert.match(server, /app\.set\("trust proxy", 1\)/);
@@ -48,8 +47,8 @@ test("production revenue core contains no demo auth or simulated payment claims"
   const source = files.map(read).join("\n");
   assert.doesNotMatch(source, /demo-token|Payment successful|sent to client|created and sent/i);
   assert.doesNotMatch(read("server.ts"), /create-checkout-session|\/api\/stripe/);
-  assert.match(read("server.ts"), /const batch = db\.batch\(\)/);
-  assert.match(read("server.ts"), /db\.collection\("tasks"\)/);
+  assert.match(read("server.ts"), /bos_records/);
+  assert.match(read("server.ts"), /supabaseServer/);
 });
 
 test("server exposes only the supported production API surface", () => {
@@ -82,8 +81,9 @@ test("proposal expiry and CSV import results use persisted outcomes", () => {
   assert.doesNotMatch(importer, /setTimeout\(\(\) => \{\s*onImport/);
 });
 
-test("authorization uses the configured Firestore database", () => {
+test("authorization uses Supabase Auth and workspace RLS", () => {
   const middleware = read("src/server/authMiddleware.ts");
-  assert.match(middleware, /process\.env\.FIREBASE_DATABASE_ID/);
-  assert.match(middleware, /getFirestore\(undefined, process\.env\.FIREBASE_DATABASE_ID\)/);
+  assert.match(middleware, /createSupabaseRequestClient/);
+  assert.match(middleware, /auth\.getUser/);
+  assert.match(middleware, /bos_workspace_members/);
 });

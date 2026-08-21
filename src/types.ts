@@ -282,7 +282,7 @@ export interface SystemSettings {
   };
   cadence: Array<{ day: number; channel: "email" | "whatsapp" | "call" | "manual"; title: string }>;
   integrations?: {
-    firebaseConfigured: boolean;
+    supabaseConfigured: boolean;
     whatsappConfigured: boolean;
     lastVerified?: string;
   };

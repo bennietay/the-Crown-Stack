@@ -619,17 +619,17 @@ export function Settings() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-xs leading-relaxed text-blue-950">
-                Firebase Authentication and Firestore are required for launch. WhatsApp click-to-chat is free and recommended first. Online payments, email automation, and WhatsApp API are intentionally unavailable in this release.
+                Supabase Auth and Postgres are the production backend. WhatsApp click-to-chat is free and recommended first. Online payments, email automation, and WhatsApp API are configured separately.
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <IntegrationStatus name="Firebase" configured={!!localSettings.integrations?.firebaseConfigured} subtitle="Authentication and durable CRM data" />
+                <IntegrationStatus name="Supabase" configured={!!localSettings.integrations?.supabaseConfigured} subtitle="Authentication and durable CRM data" />
                 <IntegrationStatus name="WhatsApp click-to-chat" configured={!!localSettings.leadCapture?.whatsappUrl} subtitle="Free manual conversations" />
                 <IntegrationStatus name="Online payments" configured={false} subtitle="Not included in this release" />
                 <IntegrationStatus name="Transactional email" configured={false} subtitle="Not included in this release" />
               </div>
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">
                 <p className="font-bold text-slate-900">Deployment secret names</p>
-                <p className="mt-1 font-mono text-[11px] break-words">FIREBASE_SERVICE_ACCOUNT_KEY</p>
+                <p className="mt-1 font-mono text-[11px] break-words">SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY</p>
                 <p className="mt-2">Changing a secret later requires no code change—update the deployment environment and redeploy.</p>
               </div>
             </CardContent>
