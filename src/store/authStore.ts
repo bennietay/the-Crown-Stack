@@ -88,6 +88,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (!settled) set({ loading: false, error: null });
     }, 8000);
     const hydrate = async (sessionUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> } | null, source: 'initial' | 'event') => {
+      console.info('[auth] hydrate', source, sessionUser ? 'session-present' : 'session-empty');
       const version = ++hydrateVersion;
       settled = true;
       window.clearTimeout(timeout);
@@ -105,6 +106,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         if (version !== hydrateVersion) return;
         set({ ...resolved, workspace: resolved.workspaces[0] || null, loading: false, error: null });
       } catch (error) {
+        console.error('[auth] workspace hydration failed', error instanceof Error ? error.message : error);
         if (version !== hydrateVersion) return;
         // Keep the Supabase session intact on hydration failures. A transient
         // RLS/network error should be retryable instead of forcing a logout.
@@ -112,7 +114,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
     };
     supabase.auth.getSession().then(({ data }) => void hydrate(data.session?.user || null, 'initial'));
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => void hydrate(session?.user || null, 'event'));
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
+      console.info('[auth] supabase event', event, session ? 'session-present' : 'session-empty');
+      void hydrate(session?.user || null, 'event');
+    });
     authUnsubscribe = () => data.subscription.unsubscribe();
     return () => { window.clearTimeout(timeout); authUnsubscribe?.(); authUnsubscribe = null; };
   },
@@ -125,8 +130,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ loading: false, error: message });
       throw new Error(message);
     }
-    const resolved = await resolveUserRecord(data.user);
-    set({ ...resolved, workspace: resolved.workspaces[0] || null, loading: false, error: null });
+    try {
+      const resolved = await resolveUserRecord(data.user);
+      set({ ...resolved, workspace: resolved.workspaces[0] || null, loading: false, error: null });
+    } catch (error) {
+      console.error('[auth] sign-in workspace hydration failed', error instanceof Error ? error.message : error);
+      set({ loading: false, error: error instanceof Error ? error.message : 'Account access denied' });
+      throw error;
+    }
   },
 
   loginWithGoogle: async () => {
