@@ -32,26 +32,40 @@ const resolveUserRecord = async (authUser: { id: string; email?: string | null; 
   const workspaceIds = activeMemberships.length ? activeMemberships.map(m => m.workspace_id) : [supabaseWorkspaceId];
   const { data: workspaces, error: workspaceError } = await supabase.from('bos_workspaces').select('*').in('id', workspaceIds);
   if (workspaceError) throw workspaceError;
-  if (!workspaces?.length) throw new Error('This account has no active workspace membership.');
+  if (!activeMemberships.length) throw new Error('This account has no active workspace membership.');
+
+  // A valid membership is the source of authorization. If the workspace row
+  // is briefly unavailable while the session/RLS policy settles, retain the
+  // assigned workspace context instead of bouncing the user back to login.
+  const visibleWorkspaces = workspaces || [];
+  const resolvedWorkspaces = activeMemberships.map((membership) => {
+    const visible = visibleWorkspaces.find((workspace) => workspace.id === membership.workspace_id);
+    return visible || {
+      id: membership.workspace_id,
+      name: membership.workspace_id === supabaseWorkspaceId ? 'Bennie Studio' : membership.workspace_id,
+      type: 'agency',
+      created_at: new Date().toISOString(),
+    };
+  });
 
   const workspaceRoles: Record<string, Role> = {};
   activeMemberships.forEach(m => { workspaceRoles[m.workspace_id] = normalizeRole(m.role); });
   if (!workspaceRoles[supabaseWorkspaceId]) workspaceRoles[supabaseWorkspaceId] = 'workspace_admin';
-  const rawRole = profile?.role || workspaceRoles[workspaces[0].id] || 'workspace_admin';
+  const rawRole = profile?.role || workspaceRoles[resolvedWorkspaces[0].id] || 'workspace_admin';
   const userObj: User = {
     id: authUser.id,
     uid: authUser.id,
     email: profile?.email || authUser.email || '',
     name: profile?.display_name || String(authUser.user_metadata?.name || authUser.email?.split('@')[0] || 'User'),
     role: normalizeRole(rawRole),
-    workspaceIds: workspaces.map(w => w.id),
-    activeWorkspaceId: workspaces[0].id,
+    workspaceIds: resolvedWorkspaces.map(w => w.id),
+    activeWorkspaceId: resolvedWorkspaces[0].id,
     createdAt: profile?.created_at,
     updatedAt: profile?.updated_at,
   };
   return {
     userObj,
-    workspaces: workspaces.map(w => ({ id: w.id, name: w.name, type: 'agency', createdAt: w.created_at } as Workspace)),
+    workspaces: resolvedWorkspaces.map(w => ({ id: w.id, name: w.name, type: 'agency', createdAt: w.created_at } as Workspace)),
     workspaceRoles,
   };
 };
