@@ -57,12 +57,13 @@ test("server exposes only the supported production API surface", () => {
   assert.match(server, /app\.all\("\/api\/\*"/);
 });
 
-test("workspace settings load before operational pages and failed loads cannot be saved", () => {
+test("workspace settings refresh in the background and failed loads cannot be saved", () => {
   const layout = read("src/components/layout/AppLayout.tsx");
   const store = read("src/store/settingsStore.ts");
   const settingsPage = read("src/pages/Settings.tsx");
   assert.match(layout, /void fetchSettings\(workspace\.id\)/);
-  assert.match(layout, /loadedSettingsWorkspaceId !== workspace\.id/);
+  assert.match(layout, /Refreshing workspace settings/);
+  assert.doesNotMatch(layout, /if \(workspace\?\.id && \(settingsLoading \|\| loadedSettingsWorkspaceId !== workspace\.id\)\)/);
   assert.match(store, /loadedWorkspaceId: null/);
   assert.match(store, /loadedWorkspaceId !== workspaceId \|\| state\.error/);
   assert.doesNotMatch(store, /Graceful fallback to default settings/);

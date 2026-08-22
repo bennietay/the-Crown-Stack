@@ -22,7 +22,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const fetchSettings = useSettingsStore(state => state.fetchSettings);
   const settingsLoading = useSettingsStore(state => state.loading);
   const settingsError = useSettingsStore(state => state.error);
-  const loadedSettingsWorkspaceId = useSettingsStore(state => state.loadedWorkspaceId);
   const location = useLocation();
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -39,28 +38,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
     setMobileMenuOpen(false);
   }, [location.pathname]);
-
-  if (workspace?.id && (settingsLoading || loadedSettingsWorkspaceId !== workspace.id)) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
-        <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm">
-          <h1 className="text-lg font-bold text-slate-900">{settingsError ? "Workspace settings unavailable" : "Loading workspace settings…"}</h1>
-          <p className="mt-2 text-sm text-slate-600">
-            {settingsError || "Preparing the current pricing, lead scoring and proposal rules."}
-          </p>
-          {settingsError ? (
-            <button
-              type="button"
-              onClick={() => void fetchSettings(workspace.id)}
-              className="mt-5 inline-flex min-h-11 items-center justify-center rounded-lg bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
-            >
-              Retry settings
-            </button>
-          ) : null}
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 font-sans text-slate-900">
@@ -126,6 +103,19 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
         {/* Viewport Content */}
         <div className="flex-1 overflow-y-auto p-3 sm:p-6 lg:p-8 pb-20 lg:pb-8">
+          {workspace?.id && (settingsLoading || settingsError) ? (
+            <div className={cn(
+              "mb-4 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-xs",
+              settingsError ? "border-amber-200 bg-amber-50 text-amber-800" : "border-slate-200 bg-white text-slate-500"
+            )}>
+              <span>{settingsError ? "Workspace settings could not be refreshed. Default settings are active." : "Refreshing workspace settings…"}</span>
+              {settingsError ? (
+                <button type="button" onClick={() => void fetchSettings(workspace.id)} className="font-semibold underline underline-offset-2 hover:no-underline">
+                  Retry
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {children}
         </div>
 
