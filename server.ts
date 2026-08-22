@@ -21,7 +21,9 @@ const integrationStatus = () => ({
   supabaseConfigured: supabaseReady,
   whatsappConfigured: Boolean(process.env.PUBLIC_WHATSAPP_URL || (process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID)),
   whatsappApiConfigured: Boolean(process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID),
-  paymentsConfigured: Boolean(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET),
+  // Vercel preserves variable names exactly; accept the lowercase name that was
+  // already added so a secret does not need to be copied or exposed again.
+  paymentsConfigured: Boolean(process.env.STRIPE_SECRET_KEY && (process.env.STRIPE_WEBHOOK_SECRET || process.env.stripe_webhook_secret)),
   emailConfigured: Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM),
   lastVerified: new Date().toISOString(),
 });
