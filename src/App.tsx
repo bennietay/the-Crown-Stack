@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { lazy, ReactNode, Suspense, useEffect } from "react";
+import { ComponentType, lazy, ReactNode, Suspense, useEffect } from "react";
 import { AppLayout } from "./components/layout/AppLayout";
 import { GlobalErrorBoundary } from "./components/GlobalErrorBoundary";
 import { RouterProvider, useLocation } from "./lib/router";
@@ -12,18 +12,39 @@ import { Unauthorized } from "./pages/Unauthorized";
 import { useAuthStore } from "./store/authStore";
 import { Role } from "./types";
 
-const Dashboard = lazy(() => import("./pages/Dashboard").then(module => ({ default: module.Dashboard })));
-const WorkQueue = lazy(() => import("./pages/WorkQueue").then(module => ({ default: module.WorkQueue })));
-const Leads = lazy(() => import("./pages/Leads").then(module => ({ default: module.Leads })));
-const Pipeline = lazy(() => import("./pages/Pipeline").then(module => ({ default: module.Pipeline })));
-const Products = lazy(() => import("./pages/Products").then(module => ({ default: module.Products })));
-const Proposals = lazy(() => import("./pages/Proposals").then(module => ({ default: module.Proposals })));
-const Customers = lazy(() => import("./pages/Customers").then(module => ({ default: module.Customers })));
-const Tickets = lazy(() => import("./pages/Tickets").then(module => ({ default: module.Tickets })));
-const Settings = lazy(() => import("./pages/Settings").then(module => ({ default: module.Settings })));
-const NotFound = lazy(() => import("./pages/NotFound").then(module => ({ default: module.NotFound })));
-const LeadCapture = lazy(() => import("./pages/LeadCapture").then(module => ({ default: module.LeadCapture })));
-const ProposalView = lazy(() => import("./pages/ProposalView").then(module => ({ default: module.ProposalView })));
+function lazyWithChunkRecovery<T extends ComponentType<any>>(factory: () => Promise<{ default: T }>, chunkName: string) {
+  return lazy(async () => {
+    try {
+      return await factory();
+    } catch (error) {
+      // A deployment can leave an already-open tab holding an old hashed chunk.
+      // Reload once with a cache-busting query so it fetches the current manifest.
+      const recoveryKey = `bennie-chunk-recovery:${chunkName}`;
+      if (!sessionStorage.getItem(recoveryKey)) {
+        sessionStorage.setItem(recoveryKey, "1");
+        const url = new URL(window.location.href);
+        url.searchParams.set("_refresh", Date.now().toString());
+        window.location.replace(url.toString());
+        return await new Promise<never>(() => undefined);
+      }
+      sessionStorage.removeItem(recoveryKey);
+      throw error;
+    }
+  });
+}
+
+const Dashboard = lazyWithChunkRecovery(() => import("./pages/Dashboard").then(module => ({ default: module.Dashboard })), "dashboard");
+const WorkQueue = lazyWithChunkRecovery(() => import("./pages/WorkQueue").then(module => ({ default: module.WorkQueue })), "work-queue");
+const Leads = lazyWithChunkRecovery(() => import("./pages/Leads").then(module => ({ default: module.Leads })), "leads");
+const Pipeline = lazyWithChunkRecovery(() => import("./pages/Pipeline").then(module => ({ default: module.Pipeline })), "pipeline");
+const Products = lazyWithChunkRecovery(() => import("./pages/Products").then(module => ({ default: module.Products })), "products");
+const Proposals = lazyWithChunkRecovery(() => import("./pages/Proposals").then(module => ({ default: module.Proposals })), "proposals");
+const Customers = lazyWithChunkRecovery(() => import("./pages/Customers").then(module => ({ default: module.Customers })), "customers");
+const Tickets = lazyWithChunkRecovery(() => import("./pages/Tickets").then(module => ({ default: module.Tickets })), "tickets");
+const Settings = lazyWithChunkRecovery(() => import("./pages/Settings").then(module => ({ default: module.Settings })), "settings");
+const NotFound = lazyWithChunkRecovery(() => import("./pages/NotFound").then(module => ({ default: module.NotFound })), "not-found");
+const LeadCapture = lazyWithChunkRecovery(() => import("./pages/LeadCapture").then(module => ({ default: module.LeadCapture })), "lead-capture");
+const ProposalView = lazyWithChunkRecovery(() => import("./pages/ProposalView").then(module => ({ default: module.ProposalView })), "proposal-view");
 
 const ADMIN: Role[] = ["super_admin", "workspace_admin"];
 const SALES: Role[] = [...ADMIN, "sales"];
