@@ -106,7 +106,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         const resolved = await resolveUserRecord(sessionUser);
         if (version !== hydrateVersion) return;
         console.info('[auth] workspace resolved', resolved.userObj.id, resolved.workspaces.map(workspace => workspace.id).join(','));
-        set({ ...resolved, workspace: resolved.workspaces[0] || null, loading: false, error: null });
+        set({ user: resolved.userObj, workspaces: resolved.workspaces, workspaceRoles: resolved.workspaceRoles, workspace: resolved.workspaces[0] || null, loading: false, error: null });
       } catch (error) {
         console.error('[auth] workspace hydration failed', error instanceof Error ? error.message : error);
         if (version !== hydrateVersion) return;
@@ -141,7 +141,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
     try {
       const resolved = await resolveUserRecord(data.user);
-      set({ ...resolved, workspace: resolved.workspaces[0] || null, loading: false, error: null });
+      set({ user: resolved.userObj, workspaces: resolved.workspaces, workspaceRoles: resolved.workspaceRoles, workspace: resolved.workspaces[0] || null, loading: false, error: null });
     } catch (error) {
       console.error('[auth] sign-in workspace hydration failed', error instanceof Error ? error.message : error);
       set({ loading: false, error: error instanceof Error ? error.message : 'Account access denied' });
