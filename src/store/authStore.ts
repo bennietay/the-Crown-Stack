@@ -88,11 +88,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const timeout = window.setTimeout(() => {
       if (!settled) set({ loading: false, error: null });
     }, 8000);
-    const hydrate = async (sessionUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> } | null) => {
+    const hydrate = async (sessionUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> } | null, source: 'initial' | 'event') => {
       const version = ++hydrateVersion;
       settled = true;
       window.clearTimeout(timeout);
       if (!sessionUser) {
+        // The initial getSession call can resolve with a stale null snapshot
+        // after a sign-in has already completed. Never let that snapshot
+        // erase a user established by the sign-in event.
+        if (source === 'initial' && get().user) return;
         if (version !== hydrateVersion) return;
         set({ user: null, workspace: null, workspaces: [], workspaceRoles: {}, loading: false, error: null });
         return;
@@ -108,8 +112,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         set({ user: null, workspace: null, workspaces: [], workspaceRoles: {}, loading: false, error: error instanceof Error ? error.message : 'Account access denied' });
       }
     };
-    supabase.auth.getSession().then(({ data }) => void hydrate(data.session?.user || null));
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => void hydrate(session?.user || null));
+    supabase.auth.getSession().then(({ data }) => void hydrate(data.session?.user || null, 'initial'));
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => void hydrate(session?.user || null, 'event'));
     authUnsubscribe = () => data.subscription.unsubscribe();
     return () => { window.clearTimeout(timeout); authUnsubscribe?.(); authUnsubscribe = null; };
   },
