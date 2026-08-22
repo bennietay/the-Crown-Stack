@@ -70,6 +70,7 @@ const resolveUserRecord = async (authUser: { id: string; email?: string | null; 
 };
 
 let authUnsubscribe: (() => void) | null = null;
+let activeHydrationUserId: string | null = null;
 
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
@@ -104,6 +105,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       try {
         const resolved = await resolveUserRecord(sessionUser);
         if (version !== hydrateVersion) return;
+        console.info('[auth] workspace resolved', resolved.userObj.id, resolved.workspaces.map(workspace => workspace.id).join(','));
         set({ ...resolved, workspace: resolved.workspaces[0] || null, loading: false, error: null });
       } catch (error) {
         console.error('[auth] workspace hydration failed', error instanceof Error ? error.message : error);
@@ -113,10 +115,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         set({ user: null, workspace: null, workspaces: [], workspaceRoles: {}, loading: false, error: error instanceof Error ? error.message : 'Account access denied' });
       }
     };
-    supabase.auth.getSession().then(({ data }) => void hydrate(data.session?.user || null, 'initial'));
+    const scheduleHydrate = (sessionUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> } | null, source: 'initial' | 'event') => {
+      if (sessionUser && activeHydrationUserId === sessionUser.id) return;
+      activeHydrationUserId = sessionUser?.id || null;
+      void hydrate(sessionUser, source).finally(() => {
+        if (!sessionUser || activeHydrationUserId === sessionUser.id) activeHydrationUserId = null;
+      });
+    };
+    supabase.auth.getSession().then(({ data }) => scheduleHydrate(data.session?.user || null, 'initial'));
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
       console.info('[auth] supabase event', event, session ? 'session-present' : 'session-empty');
-      void hydrate(session?.user || null, 'event');
+      scheduleHydrate(session?.user || null, 'event');
     });
     authUnsubscribe = () => data.subscription.unsubscribe();
     return () => { window.clearTimeout(timeout); authUnsubscribe?.(); authUnsubscribe = null; };
