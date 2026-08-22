@@ -89,7 +89,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (!settled) set({ loading: false, error: null });
     }, 8000);
     const hydrate = async (sessionUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> } | null, source: 'initial' | 'event') => {
-      console.info('[auth] hydrate', source, sessionUser ? 'session-present' : 'session-empty');
       const version = ++hydrateVersion;
       settled = true;
       window.clearTimeout(timeout);
@@ -105,7 +104,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       try {
         const resolved = await resolveUserRecord(sessionUser);
         if (version !== hydrateVersion) return;
-        console.info('[auth] workspace resolved', resolved.userObj.id, resolved.workspaces.map(workspace => workspace.id).join(','));
         set({ user: resolved.userObj, workspaces: resolved.workspaces, workspaceRoles: resolved.workspaceRoles, workspace: resolved.workspaces[0] || null, loading: false, error: null });
       } catch (error) {
         console.error('[auth] workspace hydration failed', error instanceof Error ? error.message : error);
@@ -123,8 +121,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       });
     };
     supabase.auth.getSession().then(({ data }) => scheduleHydrate(data.session?.user || null, 'initial'));
-    const { data } = supabase.auth.onAuthStateChange((event, session) => {
-      console.info('[auth] supabase event', event, session ? 'session-present' : 'session-empty');
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
       scheduleHydrate(session?.user || null, 'event');
     });
     authUnsubscribe = () => data.subscription.unsubscribe();
