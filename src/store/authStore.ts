@@ -31,13 +31,12 @@ const resolveUserRecord = async (authUser: { id: string; email?: string | null; 
   const activeMemberships = memberships || [];
   const workspaceIds = activeMemberships.length ? activeMemberships.map(m => m.workspace_id) : [supabaseWorkspaceId];
   const { data: workspaces, error: workspaceError } = await supabase.from('bos_workspaces').select('*').in('id', workspaceIds);
-  if (workspaceError) throw workspaceError;
   if (!activeMemberships.length) throw new Error('This account has no active workspace membership.');
 
   // A valid membership is the source of authorization. If the workspace row
   // is briefly unavailable while the session/RLS policy settles, retain the
   // assigned workspace context instead of bouncing the user back to login.
-  const visibleWorkspaces = workspaces || [];
+  const visibleWorkspaces = workspaceError ? [] : (workspaces || []);
   const resolvedWorkspaces = activeMemberships.map((membership) => {
     const visible = visibleWorkspaces.find((workspace) => workspace.id === membership.workspace_id);
     return visible || {
