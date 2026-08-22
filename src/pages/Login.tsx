@@ -26,11 +26,22 @@ export function Login() {
   }, []);
 
   const submitCredentials = async () => {
+    // Chrome autofill can update the input DOM without firing React's
+    // onChange event. Read the live values so autofilled credentials are not
+    // accidentally submitted as empty strings.
+    const emailInput = document.getElementById("login-email") as HTMLInputElement | null;
+    const passwordInput = document.getElementById("login-password") as HTMLInputElement | null;
+    const emailValue = emailInput?.value?.trim() || email.trim();
+    const passwordValue = passwordInput?.value || password;
+    if (!emailValue || !passwordValue) {
+      setError("Please enter your email address and password.");
+      return;
+    }
     setLoading(true);
     setError(null);
     setMessage(null);
     try {
-      await loginUser(email, password);
+      await loginUser(emailValue, passwordValue);
     } catch (err: any) {
       setError(err.message);
     } finally {
