@@ -284,6 +284,9 @@ export interface SystemSettings {
   integrations?: {
     supabaseConfigured: boolean;
     whatsappConfigured: boolean;
+    whatsappApiConfigured?: boolean;
+    paymentsConfigured?: boolean;
+    emailConfigured?: boolean;
     lastVerified?: string;
   };
   updatedAt: string;

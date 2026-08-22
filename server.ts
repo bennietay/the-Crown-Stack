@@ -17,6 +17,15 @@ if (isProduction && appMode !== "live") throw new Error("Production startup refu
 const supabaseReady = Boolean(supabaseServer);
 const publicProposalFunctionUrl = `${supabaseServerUrl}/functions/v1/public-proposal`;
 
+const integrationStatus = () => ({
+  supabaseConfigured: supabaseReady,
+  whatsappConfigured: Boolean(process.env.PUBLIC_WHATSAPP_URL || (process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID)),
+  whatsappApiConfigured: Boolean(process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID),
+  paymentsConfigured: Boolean(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET),
+  emailConfigured: Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM),
+  lastVerified: new Date().toISOString(),
+});
+
 const developmentLeads: any[] = [];
 const developmentSettings: Record<string, any> = {};
 
@@ -64,8 +73,7 @@ const getDefaultSettings = (workspaceId: string) => ({
     { day: 5, channel: "call", title: "Schedule discovery call" },
   ],
   integrations: {
-    supabaseConfigured: supabaseReady,
-    whatsappConfigured: false,
+    ...integrationStatus(),
   },
   updatedAt: new Date().toISOString(),
   updatedBy: "system",
@@ -130,6 +138,10 @@ async function readSettings(workspaceId: string) {
   let settings = mergeSettings(getDefaultSettings(workspaceId), developmentSettings[workspaceId]);
   const { data, error } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "settings", record_id: workspaceId, is_soft_deleted: false }).maybeSingle();
   if (!error && data?.data) settings = mergeSettings(settings, data.data);
+  if (!settings.leadCapture.whatsappUrl && settings.business.whatsappNumber) {
+    const digits = String(settings.business.whatsappNumber).replace(/\D/g, "");
+    if (digits) settings.leadCapture.whatsappUrl = `https://wa.me/${digits}`;
+  }
   return settings;
 }
 
@@ -295,11 +307,7 @@ app.get("/api/settings/:workspaceId/public", async (req, res) => {
 app.get("/api/settings/:workspaceId", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin"]), async (req: AuthenticatedRequest, res) => {
   try {
     const settings = await readSettings(req.workspaceId!);
-    settings.integrations = {
-      supabaseConfigured: supabaseReady,
-      whatsappConfigured: !!process.env.PUBLIC_WHATSAPP_URL,
-      lastVerified: new Date().toISOString(),
-    };
+    settings.integrations = integrationStatus();
     return res.json(settings);
   } catch (error) {
     console.error("Protected settings read failed", error);
@@ -315,7 +323,7 @@ app.put("/api/settings/:workspaceId", authenticateUser, requireWorkspace(), requ
     updates.workspaceId = workspaceId;
     updates.updatedAt = new Date().toISOString();
     updates.updatedBy = req.user!.uid;
-    updates.integrations = {};
+    updates.integrations = integrationStatus();
     const { error } = await supabaseServer.from("bos_records").upsert({ workspace_id: workspaceId, collection_name: "settings", record_id: workspaceId, data: updates, is_soft_deleted: false, updated_at: updates.updatedAt }, { onConflict: "workspace_id,collection_name,record_id" });
     if (error) return res.status(503).json({ error: "Settings storage is unavailable" });
     await logAuditEvent({ workspaceId, userId: req.user!.uid, userEmail: req.user!.email, action: "settings_updated", resourceType: "systemSettings", resourceId: workspaceId, requestId: req.requestId });

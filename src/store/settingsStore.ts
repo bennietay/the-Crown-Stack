@@ -48,8 +48,11 @@ export const DEFAULT_BENNIE_SETTINGS: SystemSettings = {
     { day: 7, channel: 'email', title: 'Send Case Studies & Testimonials' },
   ],
   integrations: {
-    supabaseConfigured: false,
+    supabaseConfigured: true,
     whatsappConfigured: false,
+    whatsappApiConfigured: false,
+    paymentsConfigured: false,
+    emailConfigured: false,
   },
   updatedAt: new Date().toISOString(),
   updatedBy: 'usr-bennie',
@@ -85,9 +88,19 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
 
     try {
-      const { data, error } = await supabase.from('bos_records').select('data').match({ workspace_id: workspaceId, collection_name: 'settings', record_id: workspaceId, is_soft_deleted: false }).maybeSingle();
-      if (error) throw error;
-      const loaded = data?.data ? { ...defaultForWs, ...data.data, workspaceId } : defaultForWs;
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      let stored: Record<string, unknown> | null = null;
+      if (accessToken) {
+        const response = await fetch(`/api/settings/${encodeURIComponent(workspaceId)}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+        if (!response.ok) throw new Error('Settings could not be loaded. Retry before making changes.');
+        stored = await response.json();
+      } else {
+        const { data, error } = await supabase.from('bos_records').select('data').match({ workspace_id: workspaceId, collection_name: 'settings', record_id: workspaceId, is_soft_deleted: false }).maybeSingle();
+        if (error) throw error;
+        stored = data?.data || null;
+      }
+      const loaded = stored ? { ...defaultForWs, ...stored, workspaceId } : defaultForWs;
       set({ settings: loaded, loading: false, error: null, loadedWorkspaceId: workspaceId });
     } catch (err: any) {
       set({
