@@ -141,9 +141,9 @@ export function WorkQueue() {
           <p className="text-sm text-slate-500">The next verified actions that can win revenue or retain a customer.</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={processOutreach} disabled={processingOutreach} title="Send due email steps through Resend; WhatsApp steps remain manual">
+          <Button variant="outline" size="sm" onClick={processOutreach} disabled={processingOutreach} title="Audit each prospect website, then send only approved email steps through Resend">
             {processingOutreach ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Send className="w-4 h-4 mr-1.5" />}
-            Run email queue
+            Audit & run email queue
           </Button>
           <Button variant={filterPeriod === "today" ? "default" : "outline"} size="sm" onClick={() => setFilterPeriod("today")}>
             Today ({pendingTasks.filter(task => isToday(new Date(task.dueDate))).length})

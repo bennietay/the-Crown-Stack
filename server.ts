@@ -41,13 +41,55 @@ const templateValue = (value: string, lead: any, settings: any) => value
   .replaceAll("{{business}}", settings.business.name || "Bennie Studio")
   .replaceAll("{{bookingUrl}}", settings.leadCapture.bookingUrl || "");
 
+const privateHost = (hostname: string) => {
+  const value = hostname.toLowerCase().replace(/\.$/, "");
+  if (!value || value === "localhost" || value.endsWith(".local") || value === "::1") return true;
+  const parts = value.split(".").map(Number);
+  if (parts.length === 4 && parts.every(part => Number.isInteger(part) && part >= 0 && part <= 255)) {
+    return parts[0] === 10 || parts[0] === 127 || (parts[0] === 192 && parts[1] === 168) || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31);
+  }
+  return false;
+};
+
+async function auditWebsite(rawUrl: string, redirectDepth = 0) {
+  let url: URL;
+  try { url = new URL(rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`); } catch { return { status: "review_required", reason: "Invalid website URL" }; }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || privateHost(url.hostname)) return { status: "review_required", reason: "Website URL is not a permitted public HTTP(S) address" };
+  const started = Date.now(); const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(url.toString(), { redirect: "manual", signal: controller.signal, headers: { "User-Agent": "Bennie-Website-Audit/1.0" } });
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (!location) return { status: "review_required", reason: "Website redirects without a destination" };
+      if (redirectDepth >= 3) return { status: "review_required", reason: "Website redirects too many times" };
+      return auditWebsite(new URL(location, url).toString(), redirectDepth + 1);
+    }
+    if (!response.ok) return { status: "review_required", url: url.toString(), reason: `Website returned HTTP ${response.status}`, httpStatus: response.status };
+    const html = (await response.text()).slice(0, 700000);
+    const text = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<[^>]+>/gi, " ").replace(/\s+/g, " ").trim();
+    const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "").replace(/\s+/g, " ").trim();
+    const description = (html.match(/<meta[^>]+(?:name|property)=["'](?:description|og:description)["'][^>]+content=["']([^"']*)["']/i)?.[1] || "").trim();
+    const h1 = (html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1] || "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+    const hasViewport = /<meta[^>]+name=["']viewport["']/i.test(html); const hasCanonical = /<link[^>]+rel=["']canonical["']/i.test(html); const https = url.protocol === "https:";
+    const findings = [!title && "Missing page title", !description && "Missing meta description", !h1 && "No clear H1 headline", !hasViewport && "Missing mobile viewport", !https && "Site is not using HTTPS"].filter(Boolean) as string[];
+    const score = Math.max(0, 100 - findings.length * 15);
+    return { status: "ready", url: url.toString(), httpStatus: response.status, responseMs: Date.now() - started, title, description, h1, wordCount: text.split(/\s+/).filter(Boolean).length, hasViewport, hasCanonical, https, score, findings, recommendations: findings.length ? findings : ["Look for a stronger conversion path and clearer enquiry CTA."] };
+  } catch (error: any) { return { status: "review_required", url: url.toString(), reason: error?.name === "AbortError" ? "Website audit timed out" : "Website could not be reached" }; }
+  finally { clearTimeout(timeout); }
+}
+
+const websiteInsight = (audit: any) => {
+  if (audit.findings?.length) return `I noticed ${audit.findings.slice(0, 2).join(" and ").toLowerCase()}.`;
+  return `The site currently presents “${audit.title || "a business website"}”; I also noticed an opportunity to make the enquiry path clearer.`;
+};
+
 async function createOutreachTasks(lead: any, settings: any) {
   const cadence = Array.isArray(settings.cadence) ? settings.cadence : [];
   if (!cadence.length) return;
   const base = new Date(lead.createdAt).getTime();
   const records = cadence.map((step: any, index: number) => {
     const dueDate = new Date(base + Number(step.day || 0) * 86400000).toISOString();
-    const body = step.body || `Hi {{name}},\n\nFollowing up on your enquiry with {{business}}. If useful, you can book a quick call here: {{bookingUrl}}\n\nReply STOP to opt out.`;
+    const body = step.body || "";
     const id = `${lead.id}-outreach-${index}`;
     return { workspace_id: lead.workspaceId, collection_name: "tasks", record_id: id, data: {
       id, workspaceId: lead.workspaceId, leadId: lead.id, title: step.title, channel: step.channel, category: "revenue", dueDate,
@@ -60,12 +102,14 @@ async function createOutreachTasks(lead: any, settings: any) {
   if (error) throw error;
 }
 
-async function sendOutreachEmail(lead: any, task: any, settings: any) {
+async function sendOutreachEmail(lead: any, task: any, settings: any, audit: any) {
   if (!process.env.RESEND_API_KEY || !process.env.EMAIL_FROM) return { sent: false, reason: "email_not_configured" };
   const metadata = typeof task.notes === "string" ? JSON.parse(task.notes) : (task.notes || {});
   const unsubscribe = `${process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"}/api/outreach/opt-out?token=${outreachToken(lead)}`;
-  const body = templateValue(metadata.body || task.title, lead, settings);
-  const response = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" }, body: JSON.stringify({ from: process.env.EMAIL_FROM, to: [lead.email], subject: templateValue(metadata.subject || task.title, lead, settings), text: `${body}\n\nUnsubscribe from follow-ups: ${unsubscribe}` }) });
+  const customBody = metadata.sequenceIndex === 0 || !metadata.body?.trim() ? `Hi {{name}},\n\nI was reviewing {{company}}'s website and noticed an opportunity worth addressing: ${websiteInsight(audit)}\n\nI help businesses turn more website visits into qualified enquiries through clearer messaging, stronger trust signals and a simpler next step. I can send you a short, practical review with the highest-impact changes—no obligation.\n\nWould you like me to send it?\n\nBennie\n{{business}}` : metadata.body;
+  const body = templateValue(customBody, lead, settings);
+  const subject = metadata.sequenceIndex === 0 || !metadata.subject?.trim() ? `A quick website idea for ${lead.companyName || "your business"}` : metadata.subject;
+  const response = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" }, body: JSON.stringify({ from: process.env.EMAIL_FROM, to: [lead.email], subject: templateValue(subject, lead, settings), text: `${body}\n\nUnsubscribe from follow-ups: ${unsubscribe}` }) });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result?.message || "Email provider rejected the message");
   return { sent: true, providerMessageId: result?.id || null };
@@ -355,12 +399,18 @@ app.post("/api/outreach/process-due", authenticateUser, requireWorkspace(), requ
       const lead = leads.get(task.leadId);
       if (!lead || lead.details?.emailOptOut || !lead.email) { skipped++; continue; }
       try {
-        const result = await sendOutreachEmail(lead, task, settings);
+        const website = String(lead.details?.website || "").trim();
+        if (!website) { skipped++; errors.push(`${task.id}: website audit required before custom outreach`); continue; }
+        const audit = await auditWebsite(website);
+        const auditTimestamp = new Date().toISOString();
+        await supabaseServer.from("bos_records").upsert({ workspace_id: workspaceId, collection_name: "website_audits", record_id: lead.id, data: { id: lead.id, leadId: lead.id, ...audit, auditedAt: auditTimestamp }, is_soft_deleted: false, updated_at: auditTimestamp }, { onConflict: "workspace_id,collection_name,record_id" });
+        if (audit.status !== "ready") { skipped++; errors.push(`${task.id}: ${audit.reason || "website audit requires review"}`); continue; }
+        const result = await sendOutreachEmail(lead, task, settings, audit);
         if (!result.sent) { skipped++; continue; }
         const timestamp = new Date().toISOString();
         await supabaseServer.from("bos_records").upsert([
           { workspace_id: workspaceId, collection_name: "tasks", record_id: task.id, data: { ...task, status: "completed", completedAt: timestamp, outcome: "Email sent automatically", providerMessageId: result.providerMessageId }, is_soft_deleted: false, updated_at: timestamp },
-          { workspace_id: workspaceId, collection_name: "outreach_events", record_id: `send-${task.id}`, data: { id: `send-${task.id}`, leadId: lead.id, taskId: task.id, channel: "email", direction: "outbound", status: "sent", providerMessageId: result.providerMessageId, createdAt: timestamp }, is_soft_deleted: false, updated_at: timestamp },
+          { workspace_id: workspaceId, collection_name: "outreach_events", record_id: `send-${task.id}`, data: { id: `send-${task.id}`, leadId: lead.id, taskId: task.id, channel: "email", direction: "outbound", status: "sent", providerMessageId: result.providerMessageId, auditId: lead.id, createdAt: timestamp }, is_soft_deleted: false, updated_at: timestamp },
         ], { onConflict: "workspace_id,collection_name,record_id" });
         sent++;
       } catch (error: any) { errors.push(`${task.id}: ${error?.message || "send failed"}`); }
