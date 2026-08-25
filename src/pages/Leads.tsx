@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/src/components/ui/card";
 import { Button } from "@/src/components/ui/button";
 import { Badge } from "@/src/components/ui/badge";
@@ -43,6 +43,8 @@ export function Leads() {
   
   const [search, setSearch] = useState("");
   const [filterView, setFilterView] = useState("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 25;
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
   const [activeDrawerTab, setActiveDrawerTab] = useState<"overview" | "qualification" | "closing">("overview");
@@ -155,13 +157,22 @@ export function Leads() {
     
     return true;
   });
-  const allVisibleSelected = filteredLeads.length > 0 && filteredLeads.every(lead => selectedLeadIds.has(lead.id));
+  const pageCount = Math.max(1, Math.ceil(filteredLeads.length / pageSize));
+  const pageLeads = filteredLeads.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const allVisibleSelected = pageLeads.length > 0 && pageLeads.every(lead => selectedLeadIds.has(lead.id));
+
+  useEffect(() => {
+    setCurrentPage(page => Math.min(page, pageCount));
+  }, [pageCount]);
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, filterView]);
 
   const toggleSelectAllVisible = () => {
     setSelectedLeadIds(previous => {
       const next = new Set(previous);
-      if (allVisibleSelected) filteredLeads.forEach(lead => next.delete(lead.id));
-      else filteredLeads.forEach(lead => next.add(lead.id));
+      if (allVisibleSelected) pageLeads.forEach(lead => next.delete(lead.id));
+      else pageLeads.forEach(lead => next.add(lead.id));
       return next;
     });
   };
@@ -445,7 +456,7 @@ export function Leads() {
                 <Button variant={filterView === "high_budget" ? "default" : "outline"} size="sm" onClick={() => setFilterView("high_budget")}>High Budget</Button>
               </div>
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" onClick={toggleSelectAllVisible} disabled={!filteredLeads.length}>
+                <Button variant="outline" size="sm" onClick={toggleSelectAllVisible} disabled={!pageLeads.length}>
                   {allVisibleSelected ? "Clear selection" : "Select all visible"}
                 </Button>
                 {selectedLeadIds.size > 0 && <Button variant="outline" size="sm" className="text-rose-600 border-rose-200 hover:bg-rose-50" onClick={handleBulkDelete}>
@@ -465,7 +476,7 @@ export function Leads() {
             <table className="w-full text-sm text-left">
               <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm text-[10px] uppercase font-bold text-slate-400">
                 <tr>
-                  <th className="px-6 py-3 w-10"><input type="checkbox" aria-label="Select all visible leads" checked={allVisibleSelected} onChange={toggleSelectAllVisible} disabled={!filteredLeads.length} /></th>
+                  <th className="px-6 py-3 w-10"><input type="checkbox" aria-label="Select all leads on this page" checked={allVisibleSelected} onChange={toggleSelectAllVisible} disabled={!pageLeads.length} /></th>
                   <th className="px-6 py-3">Contact</th>
                   <th className="px-6 py-3">Qualification Score</th>
                   <th className="px-6 py-3">SLA Status</th>
@@ -475,7 +486,7 @@ export function Leads() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredLeads.map((lead) => {
+                {pageLeads.map((lead) => {
                   const sla = getSlaStatus(lead);
                   const lTasks = workspaceTasks.filter(t => t.leadId === lead.id && t.status === "pending");
                   const nextTask = lTasks.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0];
@@ -541,6 +552,14 @@ export function Leads() {
                 })}
               </tbody>
             </table>
+            <div className="flex items-center justify-between border-t border-slate-100 px-6 py-3 text-xs text-slate-500">
+              <span>{filteredLeads.length ? `${(currentPage - 1) * pageSize + 1}–${Math.min(currentPage * pageSize, filteredLeads.length)} of ${filteredLeads.length}` : "0 leads"}</span>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" disabled={currentPage <= 1} onClick={() => setCurrentPage(page => Math.max(1, page - 1))}>Previous</Button>
+                <span>Page {currentPage} of {pageCount}</span>
+                <Button variant="outline" size="sm" disabled={currentPage >= pageCount} onClick={() => setCurrentPage(page => Math.min(pageCount, page + 1))}>Next</Button>
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>
