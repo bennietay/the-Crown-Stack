@@ -478,6 +478,8 @@ export function Leads() {
                 <tr>
                   <th className="px-6 py-3 w-10"><input type="checkbox" aria-label="Select all leads on this page" checked={allVisibleSelected} onChange={toggleSelectAllVisible} disabled={!pageLeads.length} /></th>
                   <th className="px-6 py-3">Contact</th>
+                  <th className="px-6 py-3">Country</th>
+                  <th className="px-6 py-3">Source</th>
                   <th className="px-6 py-3">Qualification Score</th>
                   <th className="px-6 py-3">SLA Status</th>
                   <th className="px-6 py-3">Potential Value</th>
@@ -501,6 +503,8 @@ export function Leads() {
                         <div className="font-semibold text-slate-900">{lead.contactName}</div>
                         <div className="text-xs text-slate-500">{lead.companyName || lead.email}</div>
                       </td>
+                      <td className="px-6 py-3 text-xs text-slate-600">{lead.country || lead.details?.city || "—"}</td>
+                      <td className="px-6 py-3 text-xs text-slate-600">{lead.source || "—"}</td>
                       <td className="px-6 py-3">
                         <div className="flex items-center mb-1">
                           {getTemperatureIcon(lead.temperature)}
