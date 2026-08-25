@@ -5,9 +5,10 @@ import { Badge } from "@/src/components/ui/badge";
 import { useDataStore } from "@/src/store/dataStore";
 import { useAuthStore } from "@/src/store/authStore";
 import { format, isBefore, isToday, parseISO, addDays } from "date-fns";
-import { CheckCircle2, Clock, DollarSign, HeartHandshake, Sparkles } from "lucide-react";
+import { CheckCircle2, Clock, DollarSign, HeartHandshake, Sparkles, Send, Loader2 } from "lucide-react";
 import { FollowUpTask } from "@/src/types";
 import { useSettingsStore } from "@/src/store/settingsStore";
+import { supabase } from "@/src/supabase";
 
 export function WorkQueue() {
   const { tasks, updateTask } = useDataStore();
@@ -18,8 +19,23 @@ export function WorkQueue() {
   const [filterPeriod, setFilterPeriod] = useState<"today" | "overdue" | "upcoming">("today");
   const [selectedTask, setSelectedTask] = useState<FollowUpTask | null>(null);
   const [outcomeNote, setOutcomeNote] = useState("");
+  const [processingOutreach, setProcessingOutreach] = useState(false);
+  const [outreachResult, setOutreachResult] = useState<string | null>(null);
 
   const now = new Date();
+
+  const processOutreach = async () => {
+    if (!workspace?.id) return;
+    setProcessingOutreach(true); setOutreachResult(null);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const response = await fetch("/api/outreach/process-due", { method: "POST", headers: { Authorization: `Bearer ${data.session?.access_token || ""}`, "Content-Type": "application/json" }, body: JSON.stringify({ workspaceId: workspace.id }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Queue processing failed");
+      setOutreachResult(result.sent ? `${result.sent} email${result.sent === 1 ? "" : "s"} sent.` : "No due email steps were sent.");
+    } catch (error: any) { setOutreachResult(error?.message || "Queue processing failed"); }
+    finally { setProcessingOutreach(false); }
+  };
 
   const workspaceTasks = tasks.filter(t => t.workspaceId === workspace?.id);
 
@@ -125,6 +141,10 @@ export function WorkQueue() {
           <p className="text-sm text-slate-500">The next verified actions that can win revenue or retain a customer.</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={processOutreach} disabled={processingOutreach} title="Send due email steps through Resend; WhatsApp steps remain manual">
+            {processingOutreach ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Send className="w-4 h-4 mr-1.5" />}
+            Run email queue
+          </Button>
           <Button variant={filterPeriod === "today" ? "default" : "outline"} size="sm" onClick={() => setFilterPeriod("today")}>
             Today ({pendingTasks.filter(task => isToday(new Date(task.dueDate))).length})
           </Button>
@@ -136,6 +156,7 @@ export function WorkQueue() {
           </Button>
         </div>
       </div>
+      {outreachResult && <p className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">{outreachResult}</p>}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div 

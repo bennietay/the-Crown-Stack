@@ -6,7 +6,7 @@ interface DataState {
   leads: Lead[]; opportunities: Opportunity[]; customers: Customer[]; tickets: Ticket[]; products: Product[]; proposals: Proposal[]; tasks: FollowUpTask[];
   loading: boolean; activeWorkspaceId: string | null;
   initWorkspace: (workspaceId: string) => () => void;
-  addLead: (lead: Omit<Lead, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
+  addLead: (lead: Omit<Lead, 'id' | 'createdAt' | 'updatedAt'>) => Promise<string>;
   updateLead: (id: string, updates: Partial<Lead>) => Promise<void>; deleteLead: (id: string) => Promise<void>;
   addOpportunity: (opportunity: Omit<Opportunity, 'id' | 'createdAt'>) => Promise<string>; updateOpportunity: (id: string, updates: Partial<Opportunity>) => Promise<void>;
   addProduct: (product: Omit<Product, 'id'>) => Promise<void>;
@@ -54,7 +54,7 @@ export const useDataStore = create<DataState>((set, get) => ({
     return () => { cancelled = true; void supabase.removeChannel(channel); };
   },
 
-  addLead: async (value) => { const id = makeId('lead'); const timestamp = now(); await writeRecord(value.workspaceId, 'leads', id, { ...value, id, createdAt: timestamp, updatedAt: timestamp }); },
+  addLead: async (value) => { const id = makeId('lead'); const timestamp = now(); await writeRecord(value.workspaceId, 'leads', id, { ...value, id, createdAt: timestamp, updatedAt: timestamp }); return id; },
   updateLead: async (id, updates) => { const ws = get().activeWorkspaceId; if (!ws) throw new Error('Workspace is not selected'); const current = get().leads.find(row => row.id === id) || {}; await writeRecord(ws, 'leads', id, { ...current, ...updates, id, updatedAt: now() }); },
   deleteLead: async (id) => { const ws = get().activeWorkspaceId; if (!ws) throw new Error('Workspace is not selected'); await softDelete(ws, 'leads', id); },
   addOpportunity: async (value) => { const id = makeId('opp'); await writeRecord(value.workspaceId, 'opportunities', id, { ...value, id, createdAt: now() }); return id; },

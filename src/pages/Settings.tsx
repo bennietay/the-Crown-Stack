@@ -584,6 +584,16 @@ export function Settings() {
                         }}
                       />
                     </div>
+                    {step.channel === 'email' && <div className="sm:col-span-2 grid md:grid-cols-2 gap-3 w-full">
+                      <div>
+                        <label className="text-[10px] font-bold uppercase text-slate-500 mb-1 block">Email Subject</label>
+                        <input type="text" className="w-full rounded-lg border border-slate-200 bg-white p-2 text-xs text-slate-900" placeholder="Use {{name}}, {{company}}, {{bookingUrl}}" value={step.subject || ''} onChange={e => { const next = [...localSettings.cadence]; next[idx] = { ...next[idx], subject: e.target.value }; setLocalSettings({ ...localSettings, cadence: next }); }} />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold uppercase text-slate-500 mb-1 block">Email Body</label>
+                        <textarea className="w-full rounded-lg border border-slate-200 bg-white p-2 text-xs text-slate-900 min-h-[42px]" placeholder="Use {{name}}, {{company}}, {{business}}, {{bookingUrl}}" value={step.body || ''} onChange={e => { const next = [...localSettings.cadence]; next[idx] = { ...next[idx], body: e.target.value }; setLocalSettings({ ...localSettings, cadence: next }); }} />
+                      </div>
+                    </div>}
                     <div className="sm:pt-5 shrink-0 flex justify-end">
                       <Button 
                         variant="ghost" 

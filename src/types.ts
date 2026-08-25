@@ -280,7 +280,7 @@ export interface SystemSettings {
     requirePhone?: boolean;
     requireCountry?: boolean;
   };
-  cadence: Array<{ day: number; channel: "email" | "whatsapp" | "call" | "manual"; title: string }>;
+  cadence: Array<{ day: number; channel: "email" | "whatsapp" | "call" | "manual"; title: string; subject?: string; body?: string }>;
   integrations?: {
     supabaseConfigured: boolean;
     whatsappConfigured: boolean;

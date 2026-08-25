@@ -42,10 +42,10 @@ export const DEFAULT_BENNIE_SETTINGS: SystemSettings = {
     requireCountry: false,
   },
   cadence: [
-    { day: 1, channel: 'email', title: 'Send Intro & Discovery Form' },
+    { day: 1, channel: 'email', title: 'Send Intro & Discovery Form', subject: 'Thanks for reaching out, {{name}}', body: 'Hi {{name}},\n\nThanks for reaching out to {{business}}. I have reviewed your enquiry and will recommend the fastest practical next step.\n\nYou can book a quick call here: {{bookingUrl}}' },
     { day: 3, channel: 'whatsapp', title: 'Follow-up on Proposal Review' },
     { day: 5, channel: 'call', title: 'Schedule Discovery Call' },
-    { day: 7, channel: 'email', title: 'Send Case Studies & Testimonials' },
+    { day: 7, channel: 'email', title: 'Send Case Studies & Testimonials', subject: 'A few ideas for {{company}}', body: 'Hi {{name}},\n\nSharing a few relevant examples and ideas for {{company}}. If you would like to move forward, reply to this email or book a time here: {{bookingUrl}}' },
   ],
   integrations: {
     supabaseConfigured: true,

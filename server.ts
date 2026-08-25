@@ -28,6 +28,49 @@ const integrationStatus = () => ({
   lastVerified: new Date().toISOString(),
 });
 
+const outreachSecret = () => process.env.OUTREACH_TOKEN_SECRET || process.env.SESSION_SECRET || "development-outreach-secret";
+const outreachToken = (lead: { id: string; email: string }) => crypto.createHmac("sha256", outreachSecret()).update(`${lead.id}:${lead.email.toLowerCase()}`).digest("hex");
+const outreachTokenValid = (lead: { id: string; email: string }, token: string) => {
+  const expected = Buffer.from(outreachToken(lead));
+  const provided = Buffer.from(token);
+  return expected.length === provided.length && crypto.timingSafeEqual(expected, provided);
+};
+const templateValue = (value: string, lead: any, settings: any) => value
+  .replaceAll("{{name}}", lead.contactName || "there")
+  .replaceAll("{{company}}", lead.companyName || "your business")
+  .replaceAll("{{business}}", settings.business.name || "Bennie Studio")
+  .replaceAll("{{bookingUrl}}", settings.leadCapture.bookingUrl || "");
+
+async function createOutreachTasks(lead: any, settings: any) {
+  const cadence = Array.isArray(settings.cadence) ? settings.cadence : [];
+  if (!cadence.length) return;
+  const base = new Date(lead.createdAt).getTime();
+  const records = cadence.map((step: any, index: number) => {
+    const dueDate = new Date(base + Number(step.day || 0) * 86400000).toISOString();
+    const body = step.body || `Hi {{name}},\n\nFollowing up on your enquiry with {{business}}. If useful, you can book a quick call here: {{bookingUrl}}\n\nReply STOP to opt out.`;
+    const id = `${lead.id}-outreach-${index}`;
+    return { workspace_id: lead.workspaceId, collection_name: "tasks", record_id: id, data: {
+      id, workspaceId: lead.workspaceId, leadId: lead.id, title: step.title, channel: step.channel, category: "revenue", dueDate,
+      status: "pending", owner: lead.assignedTo || settings.sales.defaultOwner || "usr-bennie", contactName: lead.contactName, companyName: lead.companyName,
+      reason: "Automated lead outreach cadence", recommendedAction: step.channel === "email" ? "Send the approved email template or run the email queue." : step.channel === "whatsapp" ? "Open the prefilled WhatsApp message manually." : "Complete this follow-up action.",
+      notes: JSON.stringify({ subject: step.subject || step.title, body, sequenceIndex: index }), createdAt: lead.createdAt,
+    }, is_soft_deleted: false, updated_at: new Date().toISOString() };
+  });
+  const { error } = await supabaseServer.from("bos_records").upsert(records, { onConflict: "workspace_id,collection_name,record_id" });
+  if (error) throw error;
+}
+
+async function sendOutreachEmail(lead: any, task: any, settings: any) {
+  if (!process.env.RESEND_API_KEY || !process.env.EMAIL_FROM) return { sent: false, reason: "email_not_configured" };
+  const metadata = typeof task.notes === "string" ? JSON.parse(task.notes) : (task.notes || {});
+  const unsubscribe = `${process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"}/api/outreach/opt-out?token=${outreachToken(lead)}`;
+  const body = templateValue(metadata.body || task.title, lead, settings);
+  const response = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" }, body: JSON.stringify({ from: process.env.EMAIL_FROM, to: [lead.email], subject: templateValue(metadata.subject || task.title, lead, settings), text: `${body}\n\nUnsubscribe from follow-ups: ${unsubscribe}` }) });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result?.message || "Email provider rejected the message");
+  return { sent: true, providerMessageId: result?.id || null };
+}
+
 const developmentLeads: any[] = [];
 const developmentSettings: Record<string, any> = {};
 
@@ -70,9 +113,10 @@ const getDefaultSettings = (workspaceId: string) => ({
     requireCountry: false,
   },
   cadence: [
-    { day: 1, channel: "email", title: "Send introduction and discovery form" },
+    { day: 1, channel: "email", title: "Send introduction and discovery form", subject: "Thanks for reaching out, {{name}}", body: "Hi {{name}},\n\nThanks for reaching out to {{business}}. I have reviewed your enquiry and will recommend the fastest practical next step.\n\nYou can book a quick call here: {{bookingUrl}}" },
     { day: 3, channel: "whatsapp", title: "Follow up on project review" },
     { day: 5, channel: "call", title: "Schedule discovery call" },
+    { day: 7, channel: "email", title: "Send case studies and testimonials", subject: "A few ideas for {{company}}", body: "Hi {{name}},\n\nSharing a few relevant examples and ideas for {{company}}. If you would like to move forward, reply to this email or book a time here: {{bookingUrl}}" },
   ],
   integrations: {
     ...integrationStatus(),
@@ -133,6 +177,8 @@ const settingsSchema = z.object({
     day: z.number().int().min(0).max(365),
     channel: z.enum(["email", "whatsapp", "call", "manual"]),
     title: z.string().trim().min(2).max(160),
+    subject: z.string().trim().max(200).optional(),
+    body: z.string().trim().max(5000).optional(),
   })).max(20),
 });
 
@@ -277,6 +323,13 @@ app.post("/api/capture", captureLimiter, async (req: AuthenticatedRequest, res) 
     const { error: leadWriteError } = await supabaseServer.from("bos_records").upsert(records, { onConflict: "workspace_id,collection_name,record_id" });
     if (leadWriteError) return res.status(503).json({ error: "Lead capture is temporarily unavailable" });
 
+    try {
+      await createOutreachTasks(lead, settings);
+    } catch (error) {
+      // The lead is durable even if task creation is temporarily unavailable; the queue can be rebuilt safely.
+      console.error("Outreach enrollment failed", error);
+    }
+
     await logAuditEvent({ workspaceId, userId: "public_lead_form", userEmail: lead.email, action: "lead_captured", resourceType: "lead", resourceId: lead.id, after: { score, temperature, service: validated.service }, requestId: req.requestId });
     return res.status(201).json({ success: true, id: lead.id });
   } catch (error: any) {
@@ -284,6 +337,56 @@ app.post("/api/capture", captureLimiter, async (req: AuthenticatedRequest, res) 
     console.error("Lead capture failed", error);
     return res.status(500).json({ error: "Lead capture failed" });
   }
+});
+
+app.post("/api/outreach/process-due", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin"]), async (req: AuthenticatedRequest, res) => {
+  const workspaceId = req.workspaceId!;
+  try {
+    const settings = await readSettings(workspaceId);
+    const [{ data: taskRows, error: taskError }, { data: leadRows, error: leadError }] = await Promise.all([
+      supabaseServer.from("bos_records").select("record_id,data").match({ workspace_id: workspaceId, collection_name: "tasks", is_soft_deleted: false }),
+      supabaseServer.from("bos_records").select("record_id,data").match({ workspace_id: workspaceId, collection_name: "leads", is_soft_deleted: false }),
+    ]);
+    if (taskError || leadError) throw taskError || leadError;
+    const leads = new Map((leadRows || []).map(row => [row.record_id, { id: row.record_id, ...(row.data as any) }]));
+    const due = (taskRows || []).map(row => ({ id: row.record_id, ...(row.data as any) })).filter((task: any) => task.status === "pending" && task.channel === "email" && new Date(task.dueDate).getTime() <= Date.now());
+    let sent = 0; let skipped = 0; const errors: string[] = [];
+    for (const task of due.slice(0, 50)) {
+      const lead = leads.get(task.leadId);
+      if (!lead || lead.details?.emailOptOut || !lead.email) { skipped++; continue; }
+      try {
+        const result = await sendOutreachEmail(lead, task, settings);
+        if (!result.sent) { skipped++; continue; }
+        const timestamp = new Date().toISOString();
+        await supabaseServer.from("bos_records").upsert([
+          { workspace_id: workspaceId, collection_name: "tasks", record_id: task.id, data: { ...task, status: "completed", completedAt: timestamp, outcome: "Email sent automatically", providerMessageId: result.providerMessageId }, is_soft_deleted: false, updated_at: timestamp },
+          { workspace_id: workspaceId, collection_name: "outreach_events", record_id: `send-${task.id}`, data: { id: `send-${task.id}`, leadId: lead.id, taskId: task.id, channel: "email", direction: "outbound", status: "sent", providerMessageId: result.providerMessageId, createdAt: timestamp }, is_soft_deleted: false, updated_at: timestamp },
+        ], { onConflict: "workspace_id,collection_name,record_id" });
+        sent++;
+      } catch (error: any) { errors.push(`${task.id}: ${error?.message || "send failed"}`); }
+    }
+    await logAuditEvent({ workspaceId, userId: req.user!.uid, userEmail: req.user!.email, action: "outreach_queue_processed", resourceType: "outreach", resourceId: workspaceId, after: { due: due.length, sent, skipped, errors: errors.length }, requestId: req.requestId });
+    return res.json({ success: true, due: due.length, sent, skipped, errors });
+  } catch (error) {
+    console.error("Outreach queue processing failed", error);
+    return res.status(503).json({ error: "Outreach queue could not be processed" });
+  }
+});
+
+app.get("/api/outreach/opt-out", async (req, res) => {
+  const token = String(req.query.token || "");
+  if (!token) return res.status(400).send("Missing unsubscribe token");
+  try {
+    const { data: rows, error } = await supabaseServer.from("bos_records").select("record_id,data").eq("workspace_id", supabaseWorkspaceId).eq("collection_name", "leads").eq("is_soft_deleted", false);
+    if (error) throw error;
+    const row = (rows || []).find(item => { const lead = { id: item.record_id, ...(item.data as any) }; return lead.email && outreachTokenValid(lead, token); });
+    if (!row) return res.status(404).send("This unsubscribe link is invalid or expired.");
+    const lead = { id: row.record_id, ...(row.data as any) }; const timestamp = new Date().toISOString();
+    await supabaseServer.from("bos_records").upsert([
+      { workspace_id: supabaseWorkspaceId, collection_name: "leads", record_id: lead.id, data: { ...lead, details: { ...(lead.details || {}), emailOptOut: true, optedOutAt: timestamp }, updatedAt: timestamp }, is_soft_deleted: false, updated_at: timestamp },
+    ], { onConflict: "workspace_id,collection_name,record_id" });
+    return res.status(200).send("You have been unsubscribed from Bennie Studio follow-up emails.");
+  } catch (error) { console.error("Outreach opt-out failed", error); return res.status(503).send("Unable to process unsubscribe right now."); }
 });
 
 app.get("/api/settings/:workspaceId/public", async (req, res) => {

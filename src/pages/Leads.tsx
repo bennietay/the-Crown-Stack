@@ -35,7 +35,7 @@ import { useSettingsStore } from "@/src/store/settingsStore";
 import { v4 as uuidv4 } from "uuid";
 
 export function Leads() {
-  const { leads, tasks, products, addLead, updateLead, deleteLead, addOpportunity, addProposal } = useDataStore();
+  const { leads, tasks, products, addLead, addTask, updateLead, deleteLead, addOpportunity, addProposal } = useDataStore();
   const workspace = useAuthStore(state => state.workspace);
   const settings = useSettingsStore(state => state.settings);
   const currency = settings.business.currency;
@@ -179,14 +179,14 @@ export function Leads() {
     window.open(`https://wa.me/${cleanPhone}?text=${msg}`, "_blank");
   };
 
-  const handleCreateSubmit = (e: React.FormEvent) => {
+  const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.contactName || !formData.email) {
       alert("Please provide at least a contact name and email address.");
       return;
     }
 
-    addLead({
+    const leadId = await addLead({
       workspaceId: workspace?.id || supabaseWorkspaceId,
       contactName: formData.contactName,
       email: formData.email,
@@ -206,6 +206,14 @@ export function Leads() {
       }
     });
 
+    const createdAt = new Date();
+    await Promise.all(settings.cadence.map(step => addTask({
+      workspaceId: workspace?.id || supabaseWorkspaceId, leadId, title: step.title, channel: step.channel, category: 'revenue',
+      dueDate: new Date(createdAt.getTime() + step.day * 86400000).toISOString(), status: 'pending', owner: settings.sales.defaultOwner || 'usr-bennie',
+      contactName: formData.contactName, companyName: formData.companyName, reason: 'Automated lead outreach cadence',
+      recommendedAction: step.channel === 'email' ? 'Send the approved email template or run the email queue.' : step.channel === 'whatsapp' ? 'Open the prefilled WhatsApp message manually.' : 'Complete this follow-up action.',
+      notes: JSON.stringify({ subject: step.subject || step.title, body: step.body || '' }),
+    })));
     setIsCreateOpen(false);
     setFormData(defaultLeadForm);
   };
