@@ -13,12 +13,14 @@ import {
   Settings,
   LogOut,
   Gem,
+  Coins,
 } from "lucide-react";
 
 const bennieNavigation = [
   { section: "Overview", items: [
     { name: "Dashboard", href: "/", icon: LayoutDashboard },
     { name: "Work Queue", href: "/queue", icon: CheckSquare },
+    { name: "Revenue Ledger", href: "/revenue", icon: Coins },
   ]},
   { section: "Sales", items: [
     { name: "Leads", href: "/leads", icon: Users },
@@ -56,10 +58,10 @@ export function Sidebar({ onClose, className }: SidebarProps) {
       return true;
     }
     if (activeRole === "sales") {
-      return ["/", "/queue", "/leads", "/pipeline", "/proposals", "/products", "/customers", "/diamond"].includes(href);
+      return ["/", "/queue", "/revenue", "/leads", "/pipeline", "/proposals", "/products", "/customers", "/diamond"].includes(href);
     }
     if (activeRole === "operations") {
-      return ["/", "/queue", "/products", "/customers", "/tickets", "/diamond"].includes(href);
+      return ["/", "/queue", "/revenue", "/products", "/customers", "/tickets", "/diamond"].includes(href);
     }
     if (activeRole === "support") {
       return ["/", "/customers", "/tickets", "/diamond"].includes(href);

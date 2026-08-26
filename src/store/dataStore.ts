@@ -1,10 +1,11 @@
 import { create } from 'zustand';
-import { Lead, Opportunity, Customer, Ticket, FollowUpTask, Product, Proposal, DiamondProspect, DiamondCustomer, DiamondFollowUp } from '../types';
+import { Lead, Opportunity, Customer, Ticket, FollowUpTask, Product, Proposal, DiamondProspect, DiamondCustomer, DiamondFollowUp, RevenueEvent, AffiliateRecord, EtsyRecord } from '../types';
 import { supabase } from '../supabase';
 
 interface DataState {
   leads: Lead[]; opportunities: Opportunity[]; customers: Customer[]; tickets: Ticket[]; products: Product[]; proposals: Proposal[]; tasks: FollowUpTask[];
   diamondProspects: DiamondProspect[]; diamondCustomers: DiamondCustomer[]; diamondFollowUps: DiamondFollowUp[];
+  revenueEvents: RevenueEvent[]; affiliateRecords: AffiliateRecord[]; etsyRecords: EtsyRecord[];
   loading: boolean; activeWorkspaceId: string | null;
   initWorkspace: (workspaceId: string) => () => void;
   addLead: (lead: Omit<Lead, 'id' | 'createdAt' | 'updatedAt'>) => Promise<string>;
@@ -20,11 +21,14 @@ interface DataState {
   addDiamondCustomer: (customer: Omit<DiamondCustomer, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
   addDiamondFollowUp: (followUp: Omit<DiamondFollowUp, 'id' | 'createdAt'>) => Promise<void>;
   updateDiamondFollowUp: (id: string, updates: Partial<DiamondFollowUp>) => Promise<void>;
+  addRevenueEvent: (event: Omit<RevenueEvent, 'id' | 'createdAt'>) => Promise<void>;
+  addAffiliateRecord: (record: Omit<AffiliateRecord, 'id' | 'createdAt'>) => Promise<void>;
+  addEtsyRecord: (record: Omit<EtsyRecord, 'id' | 'createdAt'>) => Promise<void>;
 }
 
 const now = () => new Date().toISOString();
 const makeId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
-const collectionState: Record<string, string> = { leads: 'leads', opportunities: 'opportunities', customers: 'customers', tickets: 'tickets', products: 'products', proposals: 'proposals', tasks: 'tasks', diamondProspects: 'diamond_prospects', diamondCustomers: 'diamond_customers', diamondFollowUps: 'diamond_followups' };
+const collectionState: Record<string, string> = { leads: 'leads', opportunities: 'opportunities', customers: 'customers', tickets: 'tickets', products: 'products', proposals: 'proposals', tasks: 'tasks', diamondProspects: 'diamond_prospects', diamondCustomers: 'diamond_customers', diamondFollowUps: 'diamond_followups', revenueEvents: 'revenue_events', affiliateRecords: 'affiliate_records', etsyRecords: 'etsy_records' };
 
 async function listCollection(workspaceId: string, collectionName: string) {
   const { data, error } = await supabase.from('bos_records').select('record_id,data').eq('workspace_id', workspaceId).eq('collection_name', collectionName).eq('is_soft_deleted', false);
@@ -43,7 +47,7 @@ async function softDelete(workspaceId: string, collectionName: string, id: strin
 }
 
 export const useDataStore = create<DataState>((set, get) => ({
-  leads: [], opportunities: [], customers: [], tickets: [], products: [], proposals: [], tasks: [], diamondProspects: [], diamondCustomers: [], diamondFollowUps: [], loading: false, activeWorkspaceId: null,
+  leads: [], opportunities: [], customers: [], tickets: [], products: [], proposals: [], tasks: [], diamondProspects: [], diamondCustomers: [], diamondFollowUps: [], revenueEvents: [], affiliateRecords: [], etsyRecords: [], loading: false, activeWorkspaceId: null,
 
   initWorkspace: (workspaceId) => {
     set({ loading: true, activeWorkspaceId: workspaceId });
@@ -80,4 +84,7 @@ export const useDataStore = create<DataState>((set, get) => ({
   addDiamondCustomer: async (value) => { const ws = get().activeWorkspaceId || value.workspaceId; if (!ws) throw new Error('Workspace is not selected'); const id = makeId('diamond-customer'); const timestamp = now(); await writeRecord(ws, 'diamond_customers', id, { ...value, id, createdAt: timestamp, updatedAt: timestamp }); },
   addDiamondFollowUp: async (value) => { const id = makeId('diamond-followup'); await writeRecord(value.workspaceId, 'diamond_followups', id, { ...value, id, createdAt: now() }); },
   updateDiamondFollowUp: async (id, updates) => { const ws = get().activeWorkspaceId; if (!ws) throw new Error('Workspace is not selected'); await writeRecord(ws, 'diamond_followups', id, { ...(get().diamondFollowUps.find(row => row.id === id) || {}), ...updates, id }); },
+  addRevenueEvent: async (value) => { const id = makeId('revenue'); await writeRecord(value.workspaceId, 'revenue_events', id, { ...value, id, createdAt: now() }); },
+  addAffiliateRecord: async (value) => { const id = makeId('affiliate'); await writeRecord(value.workspaceId, 'affiliate_records', id, { ...value, id, createdAt: now() }); },
+  addEtsyRecord: async (value) => { const id = makeId('etsy'); await writeRecord(value.workspaceId, 'etsy_records', id, { ...value, id, createdAt: now() }); },
 }));

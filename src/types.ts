@@ -174,6 +174,47 @@ export interface DiamondFollowUp {
   createdAt: string;
 }
 
+export type BusinessUnit = "WAAS" | "AMWAY" | "AFFILIATE" | "ETSY";
+export interface RevenueEvent {
+  id: string;
+  workspaceId: string;
+  businessUnit: BusinessUnit;
+  sourceType: "sale" | "subscription" | "commission" | "payout" | "refund";
+  externalId?: string;
+  customerName?: string;
+  currency: string;
+  grossRevenue: number;
+  costs: number;
+  fees: number;
+  status: "pending" | "booked" | "collected" | "refunded";
+  occurredAt: string;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface AffiliateRecord {
+  id: string;
+  workspaceId: string;
+  kind: "program" | "link" | "commission" | "lead_magnet";
+  name: string;
+  status: "draft" | "active" | "paused";
+  value?: number;
+  url?: string;
+  createdAt: string;
+}
+
+export interface EtsyRecord {
+  id: string;
+  workspaceId: string;
+  kind: "listing" | "order";
+  name: string;
+  status: "draft" | "active" | "pending" | "fulfilled" | "cancelled";
+  revenue?: number;
+  costs?: number;
+  externalId?: string;
+  createdAt: string;
+}
+
 export interface Opportunity {
   id: string;
   workspaceId: string;
