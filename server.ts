@@ -76,7 +76,12 @@ async function etsyRequest(token: EtsyToken, pathname: string) {
 }
 
 async function printifyRequest(pathname: string) {
-  const response = await fetch(`https://api.printify.com/v1${pathname}`, { headers: { Authorization: `Bearer ${process.env.PRINTIFY_API_TOKEN || ""}` } });
+  const response = await fetch(`https://api.printify.com/v1${pathname}`, {
+    headers: {
+      Authorization: `Bearer ${process.env.PRINTIFY_API_TOKEN || ""}`,
+      "User-Agent": "Bennie-Revenue-OS/1.0 (admin.bennietay.com)",
+    },
+  });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error((result as any)?.message || `Printify request failed (${response.status})`);
   return result as any;
