@@ -73,6 +73,9 @@ export function Sidebar({ onClose, className }: SidebarProps) {
   const { activeBusiness, setActiveBusiness } = useBusinessStore();
 
   const navigationGroups = bennieNavigation;
+  const visibleNavigationGroups = activeBusiness === "all"
+    ? navigationGroups
+    : navigationGroups.filter(group => ["Operations", "System"].includes(group.section));
 
   const activeRole = workspace ? workspaceRoles[workspace.id] || user?.role || "customer" : user?.role || "customer";
   const activeBusinessDefinition = businessContexts.find(context => context.id === activeBusiness) || businessContexts[0];
@@ -151,12 +154,12 @@ export function Sidebar({ onClose, className }: SidebarProps) {
         </div>
 
         <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-2.5">
-          <div className="px-1 pb-2"><p className="text-[10px] font-bold uppercase tracking-wider text-indigo-500">{activeBusinessDefinition.shortName} revenue loop</p><p className="mt-1 text-[10px] leading-4 text-slate-500">{activeBusinessDefinition.monetization}</p></div>
+          <div className="px-1 pb-2"><p className="text-[10px] font-bold uppercase tracking-wider text-indigo-500">{activeBusinessDefinition.shortName} operating area</p><p className="mt-1 text-[10px] leading-4 text-slate-500">{activeBusinessDefinition.monetization}</p></div>
           <div className="space-y-0.5">{activeBusinessDefinition.nav.map(item => <Link key={`${activeBusiness}-${item.name}`} to={item.href} onClick={onClose} title={item.description} className={cn("flex items-center justify-between rounded-lg px-2 py-1.5 text-[11px] font-semibold", location.pathname === item.href ? "bg-white text-indigo-700 shadow-sm" : "text-slate-600 hover:bg-white/80 hover:text-indigo-700")}><span>{item.name}</span><span className="text-[9px] text-slate-400">→</span></Link>)}</div>
         </div>
 
         <nav className="space-y-4">
-          {navigationGroups.map((group) => {
+          {visibleNavigationGroups.map((group) => {
             const filteredItems = group.items.filter(item => isAllowedForRole(item.href));
             if (filteredItems.length === 0) return null;
 
