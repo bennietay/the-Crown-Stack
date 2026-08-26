@@ -116,6 +116,64 @@ export interface FollowUpTask {
   createdAt: string;
 }
 
+/** Shared records for the Diamond Path (Amway) module.  These intentionally
+ * keep the source CRM's vocabulary while remaining workspace-scoped records
+ * in the Revenue OS store, so the module can evolve without a second auth or
+ * database stack. */
+export type DiamondProspectStatus = "Lead" | "Contacted" | "Shown Plan" | "Follow Up" | "Joined ABO" | "Joined PC" | "Closed" | "Not Interested" | "Archived";
+export type DiamondProspectType = "Business Builder / ABO" | "Product Customer / PC" | "Professional / Career" | "Student / Young Adult" | "Family / Warm Network" | "Other";
+export interface DiamondProspect {
+  id: string;
+  workspaceId: string;
+  name: string;
+  phone?: string;
+  email?: string;
+  location?: string;
+  status: DiamondProspectStatus;
+  prospectType: DiamondProspectType;
+  interest?: string;
+  source?: string;
+  preferredContactMethod?: string;
+  notes?: string;
+  tags?: string[];
+  lastContactDate?: string;
+  nextFollowUpDate?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DiamondCustomer {
+  id: string;
+  workspaceId: string;
+  name: string;
+  phone?: string;
+  email?: string;
+  preferredContactMethod?: string;
+  products?: string[];
+  lastPurchaseDate?: string;
+  nextReorderDate?: string;
+  lastPurchaseAmount?: number;
+  notes?: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DiamondFollowUp {
+  id: string;
+  workspaceId: string;
+  prospectId?: string;
+  customerId?: string;
+  contactName: string;
+  channel: "WhatsApp" | "Phone Call" | "Email" | "Meeting" | "Follow Up";
+  stage: "Prospecting" | "Presentation" | "Customer Care & Reorder";
+  dueDate: string;
+  completed: boolean;
+  completedAt?: string;
+  notes?: string;
+  createdAt: string;
+}
+
 export interface Opportunity {
   id: string;
   workspaceId: string;

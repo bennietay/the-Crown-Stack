@@ -45,6 +45,7 @@ const Settings = lazyWithChunkRecovery(() => import("./pages/Settings").then(mod
 const NotFound = lazyWithChunkRecovery(() => import("./pages/NotFound").then(module => ({ default: module.NotFound })), "not-found");
 const LeadCapture = lazyWithChunkRecovery(() => import("./pages/LeadCapture").then(module => ({ default: module.LeadCapture })), "lead-capture");
 const ProposalView = lazyWithChunkRecovery(() => import("./pages/ProposalView").then(module => ({ default: module.ProposalView })), "proposal-view");
+const DiamondPath = lazyWithChunkRecovery(() => import("./pages/DiamondPath").then(module => ({ default: module.DiamondPath })), "diamond-path");
 
 const ADMIN: Role[] = ["super_admin", "workspace_admin"];
 const SALES: Role[] = [...ADMIN, "sales"];
@@ -68,6 +69,7 @@ function PrivatePage({ pathname, activeRole }: { pathname: string; activeRole: R
     "/proposals": { element: <Proposals />, roles: SALES },
     "/products": { element: <Products />, roles: STAFF },
     "/customers": { element: <Customers />, roles: STAFF },
+    "/diamond": { element: <DiamondPath />, roles: STAFF },
     "/tickets": { element: <Tickets />, roles: STAFF },
     "/settings": { element: <Settings />, roles: ADMIN },
     "/unauthorized": { element: <Unauthorized />, roles: STAFF },

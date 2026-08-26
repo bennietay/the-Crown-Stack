@@ -12,6 +12,7 @@ import {
   LifeBuoy,
   Settings,
   LogOut,
+  Gem,
 } from "lucide-react";
 
 const bennieNavigation = [
@@ -28,6 +29,9 @@ const bennieNavigation = [
   { section: "Customers", items: [
     { name: "Customers", href: "/customers", icon: Users2 },
     { name: "Support Tickets", href: "/tickets", icon: LifeBuoy },
+  ]},
+  { section: "Businesses", items: [
+    { name: "Diamond Path", href: "/diamond", icon: Gem },
   ]},
   { section: "Workspace", items: [
     { name: "Settings", href: "/settings", icon: Settings },
@@ -52,13 +56,13 @@ export function Sidebar({ onClose, className }: SidebarProps) {
       return true;
     }
     if (activeRole === "sales") {
-      return ["/", "/queue", "/leads", "/pipeline", "/proposals", "/products", "/customers"].includes(href);
+      return ["/", "/queue", "/leads", "/pipeline", "/proposals", "/products", "/customers", "/diamond"].includes(href);
     }
     if (activeRole === "operations") {
-      return ["/", "/queue", "/products", "/customers", "/tickets"].includes(href);
+      return ["/", "/queue", "/products", "/customers", "/tickets", "/diamond"].includes(href);
     }
     if (activeRole === "support") {
-      return ["/", "/customers", "/tickets"].includes(href);
+      return ["/", "/customers", "/tickets", "/diamond"].includes(href);
     }
     if (activeRole === "customer") {
       return false;

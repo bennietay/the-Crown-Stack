@@ -10,13 +10,13 @@ The application remains a modular monolith. Public sites (`bennietay.com`, `app.
 
 | Capability | Current WAAS admin | Affiliate archive | Diamond Path CRM | Revenue OS destination |
 |---|---|---|---|---|
-| Authentication / workspace access | Supabase Auth + workspace membership | Firebase Auth/admin allow-list | Deployment only; source unavailable | Core Auth and RBAC |
-| Durable data | Supabase `bos_records` | Firestore collections | Unknown from deployment | Core data layer first; domain collections remain isolated |
+| Authentication / workspace access | Supabase Auth + workspace membership | Firebase Auth/admin allow-list | Standalone Vite app; no shared auth | Core Auth and RBAC |
+| Durable data | Supabase `bos_records` | Firestore collections | Neon/server API in source; migration adapter required | Core data layer first; domain collections remain isolated |
 | Leads / sequences | Leads, cadence, outreach queue, website audit gate | Lead magnets, email sequences, unsubscribe, SMTP scheduler | Prospects, follow-ups, reorder workflows visible in bundle | Core contact identity + WAAS/Affiliate/Amway domain records |
 | Tasks / follow-ups | Work Queue and persisted tasks | Scheduler-generated sequence steps | Follow-Ups and reorder actions | Shared Money Tasks with business and expected-impact fields |
-| Revenue | Proposals, products, OTC/MRC, acceptance | Commissions collection and click tracking | Business/product opportunity workflows | Normalized RevenueEvent ledger + domain records |
+| Revenue | Proposals, products, OTC/MRC, acceptance | Commissions collection and click tracking | Customer purchases, member/retail price, PV/BV and reorder cycles | Normalized RevenueEvent ledger + domain records |
 | Email | Resend outbound queue, opt-out | Nodemailer SMTP sequences | Unknown | Core communication service; provider adapters |
-| AI | Not yet centralized | Gemini server capability in archive | Unknown | Shared AI service with structured outputs and audit/cost records |
+| AI | Not yet centralized | Gemini server capability in archive | Gemini prospect assistant and scripts in source | Shared AI service with structured outputs and audit/cost records |
 | Automation | Lead cadence and manual queue processing | `/api/scheduler`, SMTP sequence processor | Follow-up/reorder behavior | Shared Automation Center with approval modes |
 | Affiliate programs/content | Not in WAAS admin | Programs, links, guides, tools, lead magnets, clicks, commissions, SEO/public views | Not applicable | Affiliate operations module; public content stays separate |
 | Etsy / Printify | Missing | POD content/public views only | Not applicable | New Etsy/POD module |
@@ -26,7 +26,8 @@ The application remains a modular monolith. Public sites (`bennietay.com`, `app.
 
 - The supplied ZIP is a React/Vite/Express/Firebase/Gemini/SMTP affiliate/content application. Its public views and admin view must not be copied wholesale into the internal app.
 - `admin.bennietay.com` is a React/Vite/Express/Supabase production app. Its existing revenue and lead data must remain intact.
-- Diamond Path CRM source is not present in the workspace. Only the public deployment is reachable, so its UI-visible capabilities can be inventoried but its schemas and business logic cannot be migrated safely until its repository/export or API is provided.
+- The Diamond Path CRM source is available at `bennietay/amway-crm`. It is a standalone React/Vite/Express CRM with typed prospects, customers, purchases, reorder follow-ups, scripts, prioritization and execution engines. Its data is not copied wholesale: the Revenue OS now has workspace-scoped `diamond_prospects`, `diamond_customers` and `diamond_followups` collections and a native Diamond Path module. The legacy deployment remains untouched while records are migrated/imported deliberately.
+- The related affiliate/WAAS source is also available at `bennietay/bennietay-studio`; its Firebase/SMTP public/admin surfaces remain separate until individual operations are mapped to the shared core.
 - No destructive database or deployment operation is part of this migration.
 
 ## Implementation order
@@ -35,7 +36,7 @@ The application remains a modular monolith. Public sites (`bennietay.com`, `app.
 2. Command Center: collected/booked/pipeline/forecast separation, configurable RM1m goal engine, truthful KPI cards.
 3. WAAS compatibility: preserve current leads, proposals, outreach audit gate, customers, support and payments.
 4. Affiliate operations: import program/link/click/commission/content records from the supplied archive without moving public pages.
-5. Amway integration: map Diamond Path data through an import/API adapter once source or export is available; keep product vs business prospects distinct.
+5. Amway integration: native Diamond Path module is in place with separate prospect types, customer records and follow-up actions; next map purchase/reorder and script libraries through an explicit importer.
 6. Etsy/POD: listings, variants, Printify sync adapter, orders, costs, fees, profit and approval-gated automation.
 7. Shared AI and automation: provider abstraction, structured validation, caching, approval modes, run history and cost tracking.
 
