@@ -1,6 +1,7 @@
-import { Link, useLocation } from "@/src/lib/router";
+import { Link, useLocation, useNavigate } from "@/src/lib/router";
 import { cn } from "@/src/lib/utils";
 import { useAuthStore } from "@/src/store/authStore";
+import { businessContexts, BusinessContext, useBusinessStore } from "@/src/store/businessStore";
 import { 
   LayoutDashboard, 
   Users, 
@@ -67,11 +68,21 @@ interface SidebarProps {
 
 export function Sidebar({ onClose, className }: SidebarProps) {
   const location = useLocation();
-  const { user, workspace, workspaces, workspaceRoles, setWorkspace } = useAuthStore();
+  const navigate = useNavigate();
+  const { user, workspace, workspaceRoles } = useAuthStore();
+  const { activeBusiness, setActiveBusiness } = useBusinessStore();
 
   const navigationGroups = bennieNavigation;
 
   const activeRole = workspace ? workspaceRoles[workspace.id] || user?.role || "customer" : user?.role || "customer";
+
+  const switchBusiness = (business: BusinessContext) => {
+    const context = businessContexts.find(item => item.id === business);
+    if (!context) return;
+    setActiveBusiness(business);
+    navigate(context.href);
+    onClose?.();
+  };
 
   const isAllowedForRole = (href: string): boolean => {
     if (user?.role === "super_admin" || activeRole === "super_admin" || activeRole === "workspace_admin") {
@@ -126,14 +137,16 @@ export function Sidebar({ onClose, className }: SidebarProps) {
         <div>
           <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-2">Active Workspace</label>
           <select 
+            aria-label="Active business workspace"
             className="mt-1.5 flex w-full items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-600"
-            value={workspace?.id || ""}
-            onChange={(e) => setWorkspace(e.target.value)}
+            value={activeBusiness}
+            onChange={(e) => switchBusiness(e.target.value as BusinessContext)}
           >
-            {workspaces.map(w => (
-              <option key={w.id} value={w.id}>{w.name}</option>
+            {businessContexts.map(context => (
+              <option key={context.id} value={context.id}>{context.name}</option>
             ))}
           </select>
+          <p className="mt-1.5 px-2 text-[10px] leading-4 text-slate-400">Dashboard always combines every business.</p>
         </div>
 
         <nav className="space-y-4">

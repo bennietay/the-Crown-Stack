@@ -14,6 +14,7 @@ import {
 import { useAuthStore } from "@/src/store/authStore";
 import { useDataStore } from "@/src/store/dataStore";
 import { useSettingsStore } from "@/src/store/settingsStore";
+import { businessContexts, useBusinessStore } from "@/src/store/businessStore";
 import { cn } from "@/src/lib/utils";
 
 export function AppLayout({ children }: { children: ReactNode }) {
@@ -25,6 +26,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const settingsError = useSettingsStore(state => state.error);
   const location = useLocation();
   const navigate = useNavigate();
+  const activeBusiness = useBusinessStore(state => state.activeBusiness);
+  const setActiveBusiness = useBusinessStore(state => state.setActiveBusiness);
+  const businessContext = businessContexts.find(context => context.id === activeBusiness) || businessContexts[0];
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -52,6 +56,16 @@ export function AppLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
     setMobileMenuOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    const routeContext = location.pathname === "/" ? "all"
+      : location.pathname === "/leads" ? "waas"
+      : location.pathname === "/etsy" ? "etsy"
+      : location.pathname === "/businesses" ? "affiliate"
+      : location.pathname === "/diamond" ? "amway"
+      : null;
+    if (routeContext && routeContext !== activeBusiness) setActiveBusiness(routeContext);
+  }, [location.pathname, activeBusiness, setActiveBusiness]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 font-sans text-slate-900">
@@ -91,11 +105,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
             </button>
 
             <h1 className="text-base sm:text-xl font-semibold text-slate-800 truncate">
-              {workspace?.name || 'Workspace'}
+              {businessContext.name}
             </h1>
 
             <span className="hidden sm:inline rounded-full bg-slate-100 px-3 py-1 text-[11px] font-bold text-slate-600 border border-slate-200">
-              Secure workspace
+              {activeBusiness === "all" ? "Combined business view" : "Business workspace"}
             </span>
           </div>
 

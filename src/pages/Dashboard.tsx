@@ -15,7 +15,7 @@ import { revenueByBusiness, summarizeRevenue } from "@/src/lib/revenue";
 
 export function Dashboard() {
   const workspace = useAuthStore(state => state.workspace);
-  const { leads, opportunities, proposals, tasks, customers, tickets, revenueEvents, revenueGoals, moneyTasks, notifications } = useDataStore();
+  const { leads, opportunities, proposals, tasks, customers, tickets, revenueEvents, revenueGoals, moneyTasks, notifications, etsyProducts, etsyRecords, printifyRecords, affiliateRecords, diamondProspects, diamondCustomers } = useDataStore();
   const settings = useSettingsStore(state => state.settings);
 
   const [timeFilter, setTimeFilter] = useState<"today" | "week" | "overdue" | "high_value">("today");
@@ -238,6 +238,13 @@ export function Dashboard() {
         <ExecutiveMetric label="Goal progress" value={activeGoal ? `${Math.min(100, totalRevenue.collected / activeGoal.targetAmount * 100).toFixed(1)}%` : "No active goal"} />
       </div>
 
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <BusinessSnapshot title="WAAS" href="/leads" primary={`${wLeads.length.toLocaleString()} leads`} secondary={`${wOpps.length.toLocaleString()} opportunities · ${wCustomers.length.toLocaleString()} customers`} />
+        <BusinessSnapshot title="Etsy" href="/etsy" primary={`${etsyProducts.filter(item => item.workspaceId === workspace?.id).length.toLocaleString()} internal products`} secondary={`${etsyRecords.filter(item => item.workspaceId === workspace?.id && item.kind === "order").length.toLocaleString()} Etsy orders · ${printifyRecords.filter(item => item.workspaceId === workspace?.id).length.toLocaleString()} Printify records`} />
+        <BusinessSnapshot title="Affiliate" href="/businesses" primary={`${affiliateRecords.filter(item => item.workspaceId === workspace?.id).length.toLocaleString()} tracked records`} secondary={`${affiliateRecords.filter(item => item.workspaceId === workspace?.id && item.kind === "commission").length.toLocaleString()} commission records`} />
+        <BusinessSnapshot title="Amway" href="/diamond" primary={`${diamondProspects.filter(item => item.workspaceId === workspace?.id).length.toLocaleString()} prospects`} secondary={`${diamondCustomers.filter(item => item.workspaceId === workspace?.id).length.toLocaleString()} customers`} />
+      </div>
+
       <div className="grid gap-4 xl:grid-cols-[1.35fr_1fr]">
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
           <div className="border-b border-slate-100 px-4 py-3"><h3 className="font-bold text-slate-900">Revenue by business</h3><p className="text-xs text-slate-500">MYR only, or foreign currency with a recorded MYR rate.</p></div>
@@ -389,6 +396,10 @@ export function Dashboard() {
       )}
     </div>
   );
+}
+
+function BusinessSnapshot({ title, href, primary, secondary }: { title: string; href: string; primary: string; secondary: string }) {
+  return <Link to={href} className="group rounded-xl border border-slate-200 bg-white p-4 transition hover:border-indigo-300 hover:shadow-sm"><div className="flex items-center justify-between"><p className="text-xs font-bold uppercase tracking-[0.16em] text-indigo-600">{title}</p><ArrowRight className="h-4 w-4 text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-indigo-500" /></div><p className="mt-3 text-lg font-extrabold text-slate-900">{primary}</p><p className="mt-1 text-xs text-slate-500">{secondary}</p></Link>;
 }
 
 function ExecutiveMetric({ label, value }: { label: string; value: string }) { return <div className="rounded-xl border border-slate-200 bg-white p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{label}</p><p className="mt-1 text-lg font-extrabold text-slate-900">{value}</p></div>; }
