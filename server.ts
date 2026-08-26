@@ -652,7 +652,7 @@ app.post("/api/integrations/printify/sync", authenticateUser, requireWorkspace()
     const shops = await printifyRequest("/shops.json"); const selectedShops = Array.isArray(shops) ? shops : [];
     const timestamp = new Date().toISOString(); const records: any[] = []; let productCount = 0; let orderCount = 0; let exceptionCount = 0;
     for (const shop of selectedShops) {
-      const [productsResult, ordersResult] = await Promise.all([printifyRequest(`/shops/${shop.id}/products.json?limit=100`), printifyRequest(`/shops/${shop.id}/orders.json?limit=10`)]);
+      const [productsResult, ordersResult] = await Promise.all([printifyRequest(`/shops/${shop.id}/products.json?limit=50`), printifyRequest(`/shops/${shop.id}/orders.json?limit=10`)]);
       for (const product of productsResult.data || []) {
         const enabledVariants = (product.variants || []).filter((variant: any) => variant.is_enabled !== false); const costs = enabledVariants.map((variant: any) => Number(variant.cost || 0) / 100).filter((cost: number) => cost > 0);
         const id = `printify-product-${product.id}`; records.push({ workspace_id: req.workspaceId, collection_name: "printify_records", record_id: id, data: { id, workspaceId: req.workspaceId, kind: "product", name: product.title || id, status: product.visible === false ? "hidden" : "active", externalId: String(product.id), shopId: String(shop.id), productionCost: costs.length ? Math.min(...costs) : undefined, metadata: { blueprintId: product.blueprint_id, printProviderId: product.print_provider_id, variantCount: enabledVariants.length, images: product.images?.slice(0, 5) || [] }, createdAt: product.created_at || timestamp, updatedAt: timestamp }, is_soft_deleted: false, updated_at: timestamp }); productCount++;
