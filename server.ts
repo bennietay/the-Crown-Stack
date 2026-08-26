@@ -4,9 +4,12 @@ import express from "express";
 import helmet from "helmet";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { z } from "zod";
+import Stripe from "stripe";
 import { calculateLeadScore, leadCaptureSchema } from "./src/lib/businessLogic";
 import { authenticateUser, AuthenticatedRequest, logAuditEvent, requireRole, requireWorkspace } from "./src/server/authMiddleware";
-import { createSupabaseRequestClient, supabaseServer, supabaseServerUrl, supabaseWorkspaceId } from "./src/server/supabase";
+import { createSupabaseRequestClient, hasSupabaseServiceRole, supabaseServer, supabaseServerUrl, supabaseWorkspaceId } from "./src/server/supabase";
+import { decryptCredential, encryptCredential, EncryptedPayload } from "./src/server/credentialCrypto";
+import { revenueByBusiness, summarizeRevenue } from "./src/lib/revenue";
 
 const isProduction = process.env.NODE_ENV === "production";
 const appMode = process.env.APP_MODE || (isProduction ? "" : "demo");
@@ -14,7 +17,8 @@ const appMode = process.env.APP_MODE || (isProduction ? "" : "demo");
 if (!['live', 'demo'].includes(appMode)) throw new Error("APP_MODE must be either live or demo.");
 if (isProduction && appMode !== "live") throw new Error("Production startup refused: APP_MODE=live is required.");
 
-const supabaseReady = Boolean(supabaseServer);
+const supabaseReady = hasSupabaseServiceRole;
+const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 const publicProposalFunctionUrl = `${supabaseServerUrl}/functions/v1/public-proposal`;
 
 const integrationStatus = () => ({
@@ -25,8 +29,58 @@ const integrationStatus = () => ({
   // already added so a secret does not need to be copied or exposed again.
   paymentsConfigured: Boolean(process.env.STRIPE_SECRET_KEY && (process.env.STRIPE_WEBHOOK_SECRET || process.env.stripe_webhook_secret)),
   emailConfigured: Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM),
+  affiliateApiConfigured: Boolean(process.env.AFFILIATE_INGEST_API_KEY),
+  etsyConfigured: Boolean(process.env.ETSY_API_KEY && process.env.ETSY_SHARED_SECRET && process.env.ETSY_REDIRECT_URI && process.env.CREDENTIAL_ENCRYPTION_KEY),
+  printifyConfigured: Boolean(process.env.PRINTIFY_API_TOKEN),
+  aiConfigured: Boolean(process.env.GEMINI_API_KEY),
   lastVerified: new Date().toISOString(),
 });
+
+const integrationEncryptionSecret = () => process.env.CREDENTIAL_ENCRYPTION_KEY || "";
+const etsyApiHeader = () => `${process.env.ETSY_API_KEY || ""}:${process.env.ETSY_SHARED_SECRET || ""}`;
+const etsyScopes = ["listings_r", "listings_w", "shops_r", "transactions_r"];
+const safeAppRedirect = (query: string) => `${process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"}/businesses?${query}`;
+
+async function readEncryptedIntegration<T>(workspaceId: string, recordId: string): Promise<T | null> {
+  const { data, error } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "integration_secrets", record_id: recordId, is_soft_deleted: false }).maybeSingle();
+  if (error) throw error;
+  if (!data?.data?.encrypted) return null;
+  return decryptCredential<T>(data.data.encrypted as EncryptedPayload, integrationEncryptionSecret());
+}
+
+async function writeEncryptedIntegration(workspaceId: string, recordId: string, value: unknown, publicMetadata: Record<string, unknown> = {}) {
+  const timestamp = new Date().toISOString();
+  const encrypted = encryptCredential(value, integrationEncryptionSecret());
+  const { error } = await supabaseServer.from("bos_records").upsert({ workspace_id: workspaceId, collection_name: "integration_secrets", record_id: recordId, data: { ...publicMetadata, encrypted, updatedAt: timestamp }, is_soft_deleted: false, updated_at: timestamp }, { onConflict: "workspace_id,collection_name,record_id" });
+  if (error) throw error;
+}
+
+type EtsyToken = { access_token: string; refresh_token: string; expires_at: string; scope: string; shop_id?: number; shop_name?: string; last_sync_at?: string };
+async function etsyToken(workspaceId: string): Promise<EtsyToken> {
+  let token = await readEncryptedIntegration<EtsyToken>(workspaceId, "etsy");
+  if (!token) throw new Error("Etsy is not connected");
+  if (new Date(token.expires_at).getTime() > Date.now() + 120_000) return token;
+  const response = await fetch("https://api.etsy.com/v3/public/oauth/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "refresh_token", client_id: process.env.ETSY_API_KEY || "", refresh_token: token.refresh_token }) });
+  const result = await response.json() as any;
+  if (!response.ok) throw new Error(result?.error_description || "Etsy token refresh failed");
+  token = { ...token, access_token: result.access_token, refresh_token: result.refresh_token || token.refresh_token, expires_at: new Date(Date.now() + Number(result.expires_in || 3600) * 1000).toISOString(), scope: result.scope || token.scope };
+  await writeEncryptedIntegration(workspaceId, "etsy", token, { provider: "etsy", connected: true, scopes: token.scope.split(" "), shopId: token.shop_id, shopName: token.shop_name, lastSyncAt: token.last_sync_at });
+  return token;
+}
+
+async function etsyRequest(token: EtsyToken, pathname: string) {
+  const response = await fetch(`https://api.etsy.com/v3/application${pathname}`, { headers: { "x-api-key": etsyApiHeader(), Authorization: `Bearer ${token.access_token}` } });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error((result as any)?.error || `Etsy request failed (${response.status})`);
+  return result as any;
+}
+
+async function printifyRequest(pathname: string) {
+  const response = await fetch(`https://api.printify.com/v1${pathname}`, { headers: { Authorization: `Bearer ${process.env.PRINTIFY_API_TOKEN || ""}` } });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error((result as any)?.message || `Printify request failed (${response.status})`);
+  return result as any;
+}
 
 const outreachSecret = () => process.env.OUTREACH_TOKEN_SECRET || process.env.SESSION_SECRET || "development-outreach-secret";
 const outreachToken = (lead: { id: string; email: string }) => crypto.createHmac("sha256", outreachSecret()).update(`${lead.id}:${lead.email.toLowerCase()}`).digest("hex");
@@ -271,7 +325,36 @@ app.use("/api/", rateLimit({ windowMs: 15 * 60 * 1000, max: 120, keyGenerator: r
 const captureLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 15, keyGenerator: rateKey, message: { error: "Too many enquiry attempts. Please try again later." } });
 const acceptanceLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, keyGenerator: rateKey, message: { error: "Too many acceptance attempts. Please try again later." } });
 
-app.use(express.json({ limit: "256kb" }));
+app.post("/api/webhooks/stripe", express.raw({ type: "application/json", limit: "1mb" }), async (req, res) => {
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || process.env.stripe_webhook_secret;
+  const signature = req.headers["stripe-signature"];
+  if (!stripe || !webhookSecret || !signature) return res.status(503).json({ error: "Stripe webhook is not configured" });
+  let event: Stripe.Event;
+  try { event = stripe.webhooks.constructEvent(req.body, signature, webhookSecret); }
+  catch (error: any) { return res.status(400).json({ error: `Invalid Stripe signature: ${error.message}` }); }
+  try {
+    const object: any = event.data.object; let metadata: any = object.metadata || {};
+    if (event.type === "invoice.payment_succeeded") metadata = object.parent?.subscription_details?.metadata || object.subscription_details?.metadata || object.metadata || {};
+    const workspaceId = String(metadata.workspaceId || ""); const proposalId = String(metadata.proposalId || "");
+    if (workspaceId && proposalId && workspaceId === supabaseWorkspaceId && (event.type === "checkout.session.completed" || event.type === "invoice.payment_succeeded")) {
+      const isCheckoutPayment = event.type === "checkout.session.completed" && object.mode === "payment";
+      const isSubscriptionInvoice = event.type === "invoice.payment_succeeded";
+      const amountMinor = Number(isSubscriptionInvoice ? object.amount_paid : object.amount_total || 0);
+      const currency = String(object.currency || "myr").toUpperCase(); const timestamp = new Date((Number(object.created || event.created) || Math.floor(Date.now() / 1000)) * 1000).toISOString();
+      const { data: proposalRow } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "proposals", record_id: proposalId, is_soft_deleted: false }).maybeSingle();
+      const writes: any[] = [{ workspace_id: workspaceId, collection_name: "stripe_events", record_id: event.id, data: { id: event.id, type: event.type, proposalId, amount: amountMinor / 100, currency, processedAt: new Date().toISOString() }, is_soft_deleted: false, updated_at: new Date().toISOString() }];
+      if ((isCheckoutPayment || isSubscriptionInvoice) && amountMinor > 0) {
+        const revenueId = `stripe-${event.id}`;
+        writes.push({ workspace_id: workspaceId, collection_name: "revenue_events", record_id: revenueId, data: { id: revenueId, workspaceId, businessUnit: "WAAS", sourceType: isSubscriptionInvoice ? "subscription" : "sale", externalId: object.id, customerName: object.customer_name || object.customer_details?.name || undefined, currency, grossRevenue: amountMinor / 100, costs: 0, fees: 0, status: "collected", occurredAt: timestamp, collectedAt: timestamp, metadata: { costsKnown: false, stripeEventId: event.id, proposalId }, createdAt: timestamp }, is_soft_deleted: false, updated_at: timestamp });
+      }
+      if (proposalRow?.data) writes.push({ workspace_id: workspaceId, collection_name: "proposals", record_id: proposalId, data: { ...(proposalRow.data as any), status: "Paid", paymentStatus: "paid", stripeCustomerId: object.customer || undefined, stripeSubscriptionId: object.subscription || object.parent?.subscription_details?.subscription || undefined, paidAt: timestamp, updatedAt: timestamp }, is_soft_deleted: false, updated_at: timestamp });
+      const { error } = await supabaseServer.from("bos_records").upsert(writes, { onConflict: "workspace_id,collection_name,record_id" }); if (error) throw error;
+    }
+    return res.json({ received: true });
+  } catch (error) { console.error("Stripe webhook processing failed", error); return res.status(503).json({ error: "Webhook could not be processed" }); }
+});
+
+app.use(express.json({ limit: "2mb" }));
 
 app.get("/healthz", (_req, res) => res.status(200).json({ status: "alive", timestamp: new Date().toISOString() }));
 app.get("/readyz", (_req, res) => {
@@ -439,10 +522,218 @@ app.get("/api/outreach/opt-out", async (req, res) => {
   } catch (error) { console.error("Outreach opt-out failed", error); return res.status(503).send("Unable to process unsubscribe right now."); }
 });
 
+const affiliateEventSchema = z.object({
+  type: z.enum(["program", "link", "click", "conversion", "commission", "content", "lead", "lead_magnet", "campaign"]),
+  externalId: z.string().trim().min(1).max(200),
+  occurredAt: z.string().datetime().optional(),
+  status: z.string().trim().max(80).optional(),
+  name: z.string().trim().max(240).optional(),
+  partner: z.string().trim().max(160).optional(),
+  url: z.string().url().max(2000).optional(),
+  currency: z.string().trim().regex(/^[A-Z]{3}$/).optional(),
+  amount: z.number().finite().min(0).max(100000000).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+function secretMatches(provided: string, expected: string) {
+  const providedHash = crypto.createHash("sha256").update(provided).digest();
+  const expectedHash = crypto.createHash("sha256").update(expected).digest();
+  return crypto.timingSafeEqual(providedHash, expectedHash);
+}
+
+app.get("/api/integrations/affiliate/health", (_req, res) => {
+  return res.status(process.env.AFFILIATE_INGEST_API_KEY ? 200 : 503).json({ configured: Boolean(process.env.AFFILIATE_INGEST_API_KEY), timestamp: new Date().toISOString() });
+});
+
+app.post("/api/integrations/affiliate/events", async (req: AuthenticatedRequest, res) => {
+  const expectedKey = process.env.AFFILIATE_INGEST_API_KEY || "";
+  const providedKey = String(req.headers["x-affiliate-api-key"] || "");
+  if (!expectedKey) return res.status(503).json({ error: "Affiliate ingestion is not configured" });
+  if (!providedKey || !secretMatches(providedKey, expectedKey)) return res.status(401).json({ error: "Invalid integration credential" });
+  try {
+    const event = affiliateEventSchema.parse(req.body); const timestamp = event.occurredAt || new Date().toISOString();
+    const recordId = `${event.type}-${event.externalId}`;
+    const record = { id: recordId, workspaceId: supabaseWorkspaceId, kind: event.type, ...event, createdAt: timestamp, updatedAt: new Date().toISOString() };
+    const writes: any[] = [{ workspace_id: supabaseWorkspaceId, collection_name: "affiliate_records", record_id: recordId, data: record, is_soft_deleted: false, updated_at: record.updatedAt }];
+    if (event.type === "commission" && event.amount !== undefined) {
+      const commissionStatus = String(event.status || "pending").toLowerCase();
+      const revenueStatus = commissionStatus === "paid" ? "collected" : commissionStatus === "confirmed" ? "booked" : commissionStatus === "reversed" ? "cancelled" : "expected";
+      const revenueId = `affiliate-${event.externalId}`;
+      writes.push({ workspace_id: supabaseWorkspaceId, collection_name: "revenue_events", record_id: revenueId, data: { id: revenueId, workspaceId: supabaseWorkspaceId, businessUnit: "AFFILIATE", sourceType: "commission", externalId: event.externalId, customerName: event.partner, currency: event.currency || "MYR", grossRevenue: event.amount, costs: 0, fees: 0, status: revenueStatus, occurredAt: timestamp, collectedAt: revenueStatus === "collected" ? timestamp : undefined, metadata: { costsKnown: false, affiliateStatus: commissionStatus }, createdAt: timestamp }, is_soft_deleted: false, updated_at: timestamp });
+    }
+    const { error } = await supabaseServer.from("bos_records").upsert(writes, { onConflict: "workspace_id,collection_name,record_id" });
+    if (error) throw error;
+    await logAuditEvent({ workspaceId: supabaseWorkspaceId, userId: "affiliate_integration", action: "affiliate_event_ingested", resourceType: event.type, resourceId: event.externalId, after: { status: event.status, amount: event.amount, currency: event.currency }, requestId: req.requestId });
+    return res.status(202).json({ accepted: true, id: recordId });
+  } catch (error) {
+    if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid affiliate event", details: error.issues });
+    console.error("Affiliate event ingestion failed", error); return res.status(503).json({ error: "Affiliate event could not be stored" });
+  }
+});
+
+app.post("/api/integrations/etsy/connect", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin"]), async (req: AuthenticatedRequest, res) => {
+  if (!integrationStatus().etsyConfigured) return res.status(503).json({ error: "Etsy OAuth environment variables are incomplete" });
+  try {
+    const state = crypto.randomBytes(32).toString("base64url"); const verifier = crypto.randomBytes(48).toString("base64url");
+    const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");
+    await writeEncryptedIntegration(req.workspaceId!, `etsy-flow-${state}`, { verifier, userId: req.user!.uid, expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() }, { provider: "etsy_oauth_flow" });
+    const params = new URLSearchParams({ response_type: "code", client_id: process.env.ETSY_API_KEY || "", redirect_uri: process.env.ETSY_REDIRECT_URI || "", scope: etsyScopes.join(" "), state, code_challenge: challenge, code_challenge_method: "S256" });
+    return res.json({ authorizationUrl: `https://www.etsy.com/oauth/connect?${params.toString()}` });
+  } catch (error) { console.error("Etsy connect failed", error); return res.status(503).json({ error: "Unable to start Etsy connection" }); }
+});
+
+app.get("/api/integrations/etsy/callback", async (req, res) => {
+  const state = String(req.query.state || ""); const code = String(req.query.code || "");
+  if (!state || !code) return res.redirect(safeAppRedirect("etsy=connection_failed"));
+  try {
+    const flow = await readEncryptedIntegration<{ verifier: string; userId: string; expiresAt: string }>(supabaseWorkspaceId, `etsy-flow-${state}`);
+    if (!flow || new Date(flow.expiresAt).getTime() < Date.now()) throw new Error("OAuth request expired");
+    const response = await fetch("https://api.etsy.com/v3/public/oauth/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "authorization_code", client_id: process.env.ETSY_API_KEY || "", redirect_uri: process.env.ETSY_REDIRECT_URI || "", code, code_verifier: flow.verifier }) });
+    const result = await response.json() as any;
+    if (!response.ok) throw new Error(result?.error_description || "Etsy rejected the authorization code");
+    const token: EtsyToken = { access_token: result.access_token, refresh_token: result.refresh_token, expires_at: new Date(Date.now() + Number(result.expires_in || 3600) * 1000).toISOString(), scope: result.scope || etsyScopes.join(" ") };
+    await writeEncryptedIntegration(supabaseWorkspaceId, "etsy", token, { provider: "etsy", connected: true, scopes: token.scope.split(" ") });
+    await supabaseServer.from("bos_records").update({ is_soft_deleted: true, updated_at: new Date().toISOString() }).match({ workspace_id: supabaseWorkspaceId, collection_name: "integration_secrets", record_id: `etsy-flow-${state}` });
+    return res.redirect(safeAppRedirect("etsy=connected"));
+  } catch (error) { console.error("Etsy callback failed", error); return res.redirect(safeAppRedirect("etsy=connection_failed")); }
+});
+
+app.get("/api/integrations/etsy/status", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations"]), async (req: AuthenticatedRequest, res) => {
+  try {
+    const token = await readEncryptedIntegration<EtsyToken>(req.workspaceId!, "etsy");
+    return res.json({ configured: integrationStatus().etsyConfigured, connected: Boolean(token), shopId: token?.shop_id, shopName: token?.shop_name, scopes: token?.scope?.split(" ") || [], tokenHealthy: token ? new Date(token.expires_at).getTime() > Date.now() : false, lastSyncAt: token?.last_sync_at });
+  } catch (error) { console.error("Etsy status failed", error); return res.status(503).json({ error: "Etsy status is unavailable" }); }
+});
+
+app.post("/api/integrations/etsy/sync", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations"]), async (req: AuthenticatedRequest, res) => {
+  try {
+    let token = await etsyToken(req.workspaceId!); const userId = token.access_token.split(".")[0];
+    const shopResult = await etsyRequest(token, `/users/${encodeURIComponent(userId)}/shops`); const shop = shopResult.results?.[0] || shopResult;
+    if (!shop?.shop_id) throw new Error("No Etsy shop was found for this account");
+    const [listingResult, receiptResult] = await Promise.all([etsyRequest(token, `/shops/${shop.shop_id}/listings/active?limit=100`), etsyRequest(token, `/shops/${shop.shop_id}/receipts?limit=100`)]);
+    const timestamp = new Date().toISOString(); const records: any[] = [];
+    for (const listing of listingResult.results || []) {
+      const money = listing.price || {}; const price = Number(money.amount || 0) / Number(money.divisor || 100);
+      const id = `listing-${listing.listing_id}`; records.push({ workspace_id: req.workspaceId, collection_name: "etsy_records", record_id: id, data: { id, workspaceId: req.workspaceId, kind: "listing", name: listing.title || id, status: listing.state || "active", revenue: price, externalId: String(listing.listing_id), createdAt: listing.creation_timestamp ? new Date(listing.creation_timestamp * 1000).toISOString() : timestamp, updatedAt: timestamp, metadata: { quantity: listing.quantity, url: listing.url, taxonomyId: listing.taxonomy_id } }, is_soft_deleted: false, updated_at: timestamp });
+    }
+    for (const receipt of receiptResult.results || []) {
+      const total = receipt.grandtotal || receipt.total_price || {}; const gross = Number(total.amount || 0) / Number(total.divisor || 100); const currency = total.currency_code || "MYR";
+      const id = `order-${receipt.receipt_id}`; records.push({ workspace_id: req.workspaceId, collection_name: "etsy_records", record_id: id, data: { id, workspaceId: req.workspaceId, kind: "order", name: receipt.name || `Etsy order ${receipt.receipt_id}`, status: receipt.status || (receipt.is_paid ? "paid" : "pending"), revenue: gross, externalId: String(receipt.receipt_id), createdAt: receipt.create_timestamp ? new Date(receipt.create_timestamp * 1000).toISOString() : timestamp, updatedAt: timestamp, metadata: { isPaid: Boolean(receipt.is_paid), isShipped: Boolean(receipt.is_shipped), messageFromBuyer: receipt.message_from_buyer || undefined } }, is_soft_deleted: false, updated_at: timestamp });
+      const revenueStatus = receipt.is_paid ? "collected" : "booked"; const revenueId = `etsy-${receipt.receipt_id}`;
+      records.push({ workspace_id: req.workspaceId, collection_name: "revenue_events", record_id: revenueId, data: { id: revenueId, workspaceId: req.workspaceId, businessUnit: "ETSY", sourceType: "sale", externalId: String(receipt.receipt_id), customerName: receipt.name || undefined, currency, grossRevenue: gross, costs: 0, fees: 0, status: revenueStatus, occurredAt: receipt.create_timestamp ? new Date(receipt.create_timestamp * 1000).toISOString() : timestamp, collectedAt: receipt.is_paid ? timestamp : undefined, metadata: { costsKnown: false, source: "etsy_sync" }, createdAt: timestamp }, is_soft_deleted: false, updated_at: timestamp });
+    }
+    if (records.length) { const { error } = await supabaseServer.from("bos_records").upsert(records, { onConflict: "workspace_id,collection_name,record_id" }); if (error) throw error; }
+    token = { ...token, shop_id: Number(shop.shop_id), shop_name: shop.shop_name || shop.title, last_sync_at: timestamp };
+    await writeEncryptedIntegration(req.workspaceId!, "etsy", token, { provider: "etsy", connected: true, scopes: token.scope.split(" "), shopId: token.shop_id, shopName: token.shop_name, lastSyncAt: timestamp });
+    await logAuditEvent({ workspaceId: req.workspaceId!, userId: req.user!.uid, userEmail: req.user!.email, action: "etsy_synced", resourceType: "integration", resourceId: "etsy", after: { listings: listingResult.results?.length || 0, orders: receiptResult.results?.length || 0 }, requestId: req.requestId });
+    return res.json({ success: true, shop: token.shop_name, listings: listingResult.results?.length || 0, orders: receiptResult.results?.length || 0, lastSyncAt: timestamp });
+  } catch (error: any) { console.error("Etsy sync failed", error); return res.status(503).json({ error: error?.message || "Etsy sync failed" }); }
+});
+
+app.delete("/api/integrations/etsy", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin"]), async (req: AuthenticatedRequest, res) => {
+  const { error } = await supabaseServer.from("bos_records").update({ is_soft_deleted: true, updated_at: new Date().toISOString() }).match({ workspace_id: req.workspaceId, collection_name: "integration_secrets", record_id: "etsy" });
+  if (error) return res.status(503).json({ error: "Etsy could not be disconnected" });
+  await logAuditEvent({ workspaceId: req.workspaceId!, userId: req.user!.uid, userEmail: req.user!.email, action: "etsy_disconnected", resourceType: "integration", resourceId: "etsy", requestId: req.requestId });
+  return res.json({ success: true });
+});
+
+app.get("/api/integrations/printify/status", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations"]), async (req: AuthenticatedRequest, res) => {
+  return res.json({ configured: Boolean(process.env.PRINTIFY_API_TOKEN) });
+});
+
+app.post("/api/integrations/printify/sync", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations"]), async (req: AuthenticatedRequest, res) => {
+  if (!process.env.PRINTIFY_API_TOKEN) return res.status(503).json({ error: "Printify is not configured" });
+  try {
+    const shops = await printifyRequest("/shops.json"); const selectedShops = Array.isArray(shops) ? shops : [];
+    const timestamp = new Date().toISOString(); const records: any[] = []; let productCount = 0; let orderCount = 0; let exceptionCount = 0;
+    for (const shop of selectedShops) {
+      const [productsResult, ordersResult] = await Promise.all([printifyRequest(`/shops/${shop.id}/products.json?limit=100`), printifyRequest(`/shops/${shop.id}/orders.json?limit=10`)]);
+      for (const product of productsResult.data || []) {
+        const enabledVariants = (product.variants || []).filter((variant: any) => variant.is_enabled !== false); const costs = enabledVariants.map((variant: any) => Number(variant.cost || 0) / 100).filter((cost: number) => cost > 0);
+        const id = `printify-product-${product.id}`; records.push({ workspace_id: req.workspaceId, collection_name: "printify_records", record_id: id, data: { id, workspaceId: req.workspaceId, kind: "product", name: product.title || id, status: product.visible === false ? "hidden" : "active", externalId: String(product.id), shopId: String(shop.id), productionCost: costs.length ? Math.min(...costs) : undefined, metadata: { blueprintId: product.blueprint_id, printProviderId: product.print_provider_id, variantCount: enabledVariants.length, images: product.images?.slice(0, 5) || [] }, createdAt: product.created_at || timestamp, updatedAt: timestamp }, is_soft_deleted: false, updated_at: timestamp }); productCount++;
+      }
+      for (const order of ordersResult.data || []) {
+        const productionCost = (order.line_items || []).reduce((sum: number, item: any) => sum + Number(item.cost || 0) * Number(item.quantity || 1) / 100, 0); const shippingCost = (order.line_items || []).reduce((sum: number, item: any) => sum + Number(item.shipping_cost || 0) / 100, 0);
+        const shipment = order.shipments?.[0]; const id = `printify-order-${order.id}`; const isException = ["canceled", "on-hold", "failed", "payment-not-received"].includes(String(order.status).toLowerCase());
+        records.push({ workspace_id: req.workspaceId, collection_name: "printify_records", record_id: id, data: { id, workspaceId: req.workspaceId, kind: "order", name: order.metadata?.shop_order_label || `Printify order ${order.id}`, status: order.status || "unknown", externalId: String(order.id), shopId: String(shop.id), productionCost, shippingCost, trackingUrl: shipment?.url, metadata: { carrier: shipment?.carrier, trackingNumber: shipment?.number, lineItems: (order.line_items || []).map((item: any) => ({ productId: item.product_id, quantity: item.quantity, status: item.status, sku: item.metadata?.sku })) }, createdAt: order.created_at || timestamp, updatedAt: timestamp }, is_soft_deleted: false, updated_at: timestamp }); orderCount++;
+        if (isException) {
+          exceptionCount++; const noticeId = `printify-exception-${order.id}`; records.push({ workspace_id: req.workspaceId, collection_name: "notifications", record_id: noticeId, data: { id: noticeId, workspaceId: req.workspaceId, category: "critical", source: "ETSY", title: `Printify order requires attention`, message: `${order.metadata?.shop_order_label || order.id} is ${order.status}. Review it in Printify before taking further action.`, status: "unread", relatedEntityType: "printify_order", relatedEntityId: String(order.id), createdAt: timestamp, updatedAt: timestamp }, is_soft_deleted: false, updated_at: timestamp });
+        }
+      }
+    }
+    for (let offset = 0; offset < records.length; offset += 500) { const { error } = await supabaseServer.from("bos_records").upsert(records.slice(offset, offset + 500), { onConflict: "workspace_id,collection_name,record_id" }); if (error) throw error; }
+    await logAuditEvent({ workspaceId: req.workspaceId!, userId: req.user!.uid, userEmail: req.user!.email, action: "printify_synced", resourceType: "integration", resourceId: "printify", after: { shops: selectedShops.length, products: productCount, orders: orderCount, exceptions: exceptionCount }, requestId: req.requestId });
+    return res.json({ success: true, shops: selectedShops.length, products: productCount, orders: orderCount, exceptions: exceptionCount, lastSyncAt: timestamp });
+  } catch (error: any) { console.error("Printify sync failed", error); return res.status(503).json({ error: error?.message || "Printify sync failed" }); }
+});
+
+const amwayRecord = z.record(z.string(), z.unknown());
+const amwayImportSchema = z.object({
+  prospects: z.array(amwayRecord).max(10000).default([]), customers: z.array(amwayRecord).max(10000).default([]),
+  purchases: z.array(amwayRecord).max(25000).default([]), opportunities: z.array(amwayRecord).max(10000).default([]),
+  activities: z.array(amwayRecord).max(25000).default([]), reorderTasks: z.array(amwayRecord).max(25000).default([]),
+  products: z.array(amwayRecord).max(10000).default([]), scripts: z.array(amwayRecord).max(5000).default([]),
+  teamMembers: z.array(amwayRecord).max(10000).default([]),
+});
+
+app.post("/api/integrations/amway/import", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin"]), async (req: AuthenticatedRequest, res) => {
+  try {
+    const payload = amwayImportSchema.parse(req.body); const timestamp = new Date().toISOString();
+    const mappings: Array<[keyof typeof payload, string]> = [["prospects", "diamond_prospects"], ["customers", "diamond_customers"], ["purchases", "diamond_purchases"], ["opportunities", "diamond_opportunities"], ["activities", "diamond_activities"], ["reorderTasks", "diamond_reorder_tasks"], ["products", "diamond_products"], ["scripts", "diamond_scripts"], ["teamMembers", "diamond_team_members"]];
+    const writes: any[] = [];
+    for (const [key, collectionName] of mappings) for (const raw of payload[key]) {
+      const id = String(raw.id || `${collectionName}-${crypto.randomUUID()}`); const normalized: any = { ...raw, id, workspaceId: req.workspaceId, importedAt: timestamp };
+      if (key === "prospects") { normalized.createdAt = raw.createdAt || raw.addedDate || timestamp; normalized.updatedAt = raw.updatedAt || timestamp; }
+      if (key === "customers") { normalized.createdAt = raw.createdAt || timestamp; normalized.updatedAt = raw.updatedAt || timestamp; }
+      writes.push({ workspace_id: req.workspaceId, collection_name: collectionName, record_id: id, data: normalized, is_soft_deleted: false, updated_at: timestamp });
+    }
+    for (const purchase of payload.purchases) {
+      const status = String(purchase.status || "Active"); if (status === "Cancelled") continue;
+      const total = Number(purchase.totalPrice || (Number(purchase.unitPrice || 0) * Number(purchase.quantity || 1)) || 0); if (total <= 0) continue;
+      const purchaseId = String(purchase.id); const revenueId = `amway-${purchaseId}`; const collected = ["Completed", "Reordered"].includes(status);
+      writes.push({ workspace_id: req.workspaceId, collection_name: "revenue_events", record_id: revenueId, data: { id: revenueId, workspaceId: req.workspaceId, businessUnit: "AMWAY", sourceType: "sale", externalId: purchaseId, customerName: purchase.customerName, currency: "MYR", grossRevenue: total, costs: 0, fees: 0, status: collected ? "collected" : "booked", occurredAt: purchase.purchaseDate ? new Date(`${purchase.purchaseDate}T00:00:00`).toISOString() : timestamp, collectedAt: collected ? timestamp : undefined, metadata: { costsKnown: false, pv: purchase.pv, bv: purchase.bv, source: "diamond_path_import" }, createdAt: purchase.createdAt || timestamp }, is_soft_deleted: false, updated_at: timestamp });
+    }
+    for (let offset = 0; offset < writes.length; offset += 500) { const { error } = await supabaseServer.from("bos_records").upsert(writes.slice(offset, offset + 500), { onConflict: "workspace_id,collection_name,record_id" }); if (error) throw error; }
+    const counts = Object.fromEntries(mappings.map(([key]) => [key, payload[key].length]));
+    await logAuditEvent({ workspaceId: req.workspaceId!, userId: req.user!.uid, userEmail: req.user!.email, action: "amway_backup_imported", resourceType: "migration", resourceId: "diamond_path", after: counts, requestId: req.requestId });
+    return res.json({ success: true, counts, revenueEventsMapped: payload.purchases.filter(item => String(item.status) !== "Cancelled" && Number(item.totalPrice || 0) > 0).length });
+  } catch (error) {
+    if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid Diamond Path backup", details: error.issues });
+    console.error("Amway import failed", error); return res.status(503).json({ error: "Diamond Path data could not be imported" });
+  }
+});
+
+app.post("/api/ai/daily-brief", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations", "sales"]), async (req: AuthenticatedRequest, res) => {
+  try {
+    const workspaceId = req.workspaceId!; const dateKey = new Date().toISOString().slice(0, 10); const force = req.body?.force === true;
+    if (!force) { const { data: cached } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "daily_briefs", record_id: dateKey, is_soft_deleted: false }).maybeSingle(); if (cached?.data) return res.json({ ...cached.data, cached: true }); }
+    const collections = ["revenue_events", "leads", "opportunities", "money_tasks", "notifications"];
+    const { data: rows, error } = await supabaseServer.from("bos_records").select("collection_name,record_id,data").eq("workspace_id", workspaceId).in("collection_name", collections).eq("is_soft_deleted", false); if (error) throw error;
+    const records = (collection: string) => (rows || []).filter(row => row.collection_name === collection).map(row => ({ id: row.record_id, ...(row.data as any) }));
+    const revenue = records("revenue_events") as any[]; const leads = records("leads") as any[]; const opportunities = records("opportunities") as any[]; const tasks = records("money_tasks") as any[]; const notices = records("notifications") as any[];
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10); const month = dateKey.slice(0, 7);
+    const yesterdayTotals = summarizeRevenue(revenue.filter(event => String(event.occurredAt || "").slice(0, 10) === yesterday)); const monthTotals = summarizeRevenue(revenue.filter(event => String(event.occurredAt || "").slice(0, 7) === month));
+    const rankedTasks = tasks.filter(task => !["completed", "dismissed"].includes(task.status)).map(task => ({ ...task, expectedImpact: task.estimatedRevenueImpact !== undefined && task.probability !== undefined ? Number(task.estimatedRevenueImpact) * Number(task.probability) / 100 : null })).sort((a, b) => (b.expectedImpact ?? -1) - (a.expectedImpact ?? -1));
+    const openOpportunities = opportunities.filter(opportunity => !["won", "lost"].includes(String(opportunity.stage || "").toLowerCase())); const risks = notices.filter(notice => notice.status === "unread" && ["critical", "warning"].includes(notice.category));
+    const evidence = { date: dateKey, yesterday: yesterdayTotals, monthToDate: monthTotals, businessPerformance: revenueByBusiness(revenue), leads: { newThisMonth: leads.filter(lead => String(lead.createdAt || "").slice(0, 7) === month).length, reviewRequired: leads.filter(lead => ["imported_review_required", "researching"].includes(lead.status)).length }, openOpportunities: openOpportunities.map(opportunity => ({ name: opportunity.name || opportunity.title, stage: opportunity.stage, value: opportunity.estimatedValue || opportunity.expectedValue, currency: opportunity.currency, probability: opportunity.probability })).slice(0, 20), topTasks: rankedTasks.slice(0, 5).map(task => ({ title: task.title, business: task.businessUnit, reason: task.reason, recommendedAction: task.recommendedAction, expectedImpact: task.expectedImpact })), risks: risks.slice(0, 10).map(risk => ({ source: risk.source, title: risk.title, message: risk.message })) };
+    let source = "deterministic"; let content = `# Daily Revenue Brief — ${dateKey}\n\n## Yesterday\nCollected: MYR ${yesterdayTotals.collected.toLocaleString()}\nEstimated profit with known costs: MYR ${yesterdayTotals.profit.toLocaleString()}\n\n## Month to Date\nCollected: MYR ${monthTotals.collected.toLocaleString()}\nBooked: MYR ${monthTotals.booked.toLocaleString()}\nExpected: MYR ${monthTotals.expected.toLocaleString()}\n\n## Biggest Opportunity\n${rankedTasks[0] ? `${rankedTasks[0].title}${rankedTasks[0].expectedImpact === null ? "" : ` — expected MYR ${rankedTasks[0].expectedImpact.toLocaleString()}`}` : "No evidence-backed Money Task is recorded."}\n\n## Biggest Risk\n${risks[0] ? `${risks[0].title}: ${risks[0].message}` : "No unresolved critical or warning notification."}\n\n## Top Actions Today\n${rankedTasks.length ? rankedTasks.slice(0, 5).map((task, index) => `${index + 1}. [${task.businessUnit}] ${task.recommendedAction}`).join("\n") : "No Money Tasks are recorded."}`;
+    let usage: any = undefined; const model = process.env.GEMINI_MODEL || "gemini-3.6-flash";
+    if (process.env.GEMINI_API_KEY) {
+      const prompt = `You are the evidence-bound CEO briefing layer for Bennie Revenue OS. Produce concise Markdown with sections Yesterday, Month to Date, WAAS, Etsy, Affiliate, Amway, Biggest Opportunity, Biggest Risk, and Top 5 Actions Today. Use only the JSON evidence below. Never invent or infer missing numbers. Label missing data plainly. Preserve MYR distinctions between collected, booked, expected and profit.\n\n${JSON.stringify(evidence)}`;
+      const aiResponse = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", { method: "POST", headers: { "x-goog-api-key": process.env.GEMINI_API_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ model, input: prompt }) }); const aiResult = await aiResponse.json() as any;
+      if (!aiResponse.ok || !aiResult.output_text) throw new Error(aiResult?.error?.message || "Gemini did not return a brief");
+      content = aiResult.output_text; source = "gemini"; usage = aiResult.usage || undefined;
+    }
+    const timestamp = new Date().toISOString(); const brief = { id: dateKey, workspaceId, date: dateKey, content, source, model: source === "gemini" ? model : undefined, usage, evidence, createdAt: timestamp };
+    const { error: writeError } = await supabaseServer.from("bos_records").upsert([{ workspace_id: workspaceId, collection_name: "daily_briefs", record_id: dateKey, data: brief, is_soft_deleted: false, updated_at: timestamp }, { workspace_id: workspaceId, collection_name: "ai_jobs", record_id: `daily-brief-${dateKey}`, data: { id: `daily-brief-${dateKey}`, provider: source, model: source === "gemini" ? model : undefined, jobType: "daily_revenue_brief", usage, timestamp, relatedEntity: dateKey }, is_soft_deleted: false, updated_at: timestamp }], { onConflict: "workspace_id,collection_name,record_id" }); if (writeError) throw writeError;
+    return res.json({ ...brief, cached: false });
+  } catch (error: any) { console.error("Daily brief failed", error); return res.status(503).json({ error: error?.message || "Daily brief could not be generated" }); }
+});
+
 app.get("/api/settings/:workspaceId/public", async (req, res) => {
   if (req.params.workspaceId !== supabaseWorkspaceId) return res.status(404).json({ error: "Workspace not found" });
   try {
-    const settings = await readSettings("ws-bennie");
+    const settings = await readSettings(req.params.workspaceId);
     return res.json({
       business: { name: settings.business.name },
       leadCapture: {
@@ -492,16 +783,12 @@ app.put("/api/settings/:workspaceId", authenticateUser, requireWorkspace(), requ
 
 app.get("/api/proposals/public/:token", async (req, res) => {
   try {
-    const edgeResponse = await fetch(`${publicProposalFunctionUrl}?token=${encodeURIComponent(req.params.token)}`);
-    return res.status(edgeResponse.status).json(await edgeResponse.json());
-    /* Legacy implementation retained below for rollback reference. */
-    /* istanbul ignore next */
     const { data: rows, error } = await supabaseServer.from("bos_records").select("record_id,data").eq("workspace_id", supabaseWorkspaceId).eq("collection_name", "proposals").eq("is_soft_deleted", false);
     if (error) throw error;
     const row = (rows || []).find(item => item.data?.token === req.params.token);
     if (!row) return res.status(404).json({ error: "Proposal not found or no longer available" });
     const proposal = row.data as any;
-    if (!['sent', 'accepted'].includes(String(proposal.status).toLowerCase())) return res.status(404).json({ error: "Proposal not found or no longer available" });
+    if (!["sent", "accepted", "payment pending", "paid"].includes(String(proposal.status).toLowerCase())) return res.status(404).json({ error: "Proposal not found or no longer available" });
     if (proposal.expiresAt && new Date(proposal.expiresAt).getTime() < Date.now()) return res.status(410).json({ error: "This proposal has expired" });
 
     const productIds = Array.from(new Set((proposal.items || []).map((item: any) => item.productId).filter(Boolean))) as string[];
@@ -515,6 +802,27 @@ app.get("/api/proposals/public/:token", async (req, res) => {
     console.error("Proposal read failed", error);
     return res.status(500).json({ error: "Failed to load proposal" });
   }
+});
+
+app.post("/api/proposals/public/:token/checkout", acceptanceLimiter, async (req, res) => {
+  if (!stripe || !process.env.STRIPE_SECRET_KEY) return res.status(503).json({ error: "Online payment is not configured" });
+  try {
+    const { data: rows, error } = await supabaseServer.from("bos_records").select("record_id,data").eq("workspace_id", supabaseWorkspaceId).eq("collection_name", "proposals").eq("is_soft_deleted", false);
+    if (error) throw error;
+    const row = (rows || []).find(item => item.data?.token === req.params.token); if (!row) return res.status(404).json({ error: "Proposal not found" });
+    const proposal = { id: row.record_id, ...(row.data as any) };
+    if (!["accepted", "payment pending"].includes(String(proposal.status).toLowerCase())) return res.status(409).json({ error: "Accept the proposal before payment" });
+    if (proposal.expiresAt && new Date(proposal.expiresAt).getTime() < Date.now()) return res.status(410).json({ error: "This proposal has expired" });
+    const currency = String(proposal.currency || "MYR").toLowerCase(); const totalOtc = Number(proposal.totalOTC || 0); const totalMrc = Number(proposal.totalMRC || 0);
+    if (totalOtc <= 0 && totalMrc <= 0) return res.status(400).json({ error: "This proposal has no payable amount" });
+    const metadata = { workspaceId: supabaseWorkspaceId, proposalId: proposal.id };
+    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [];
+    if (totalOtc > 0) lineItems.push({ quantity: 1, price_data: { currency, unit_amount: Math.round(totalOtc * 100), product_data: { name: `${proposal.title || "Bennie Studio project"} — one-off` } } });
+    if (totalMrc > 0) lineItems.push({ quantity: 1, price_data: { currency, unit_amount: Math.round(totalMrc * 100), recurring: { interval: "month" }, product_data: { name: `${proposal.title || "Bennie Studio care plan"} — monthly` } } });
+    const session = await stripe.checkout.sessions.create({ mode: totalMrc > 0 ? "subscription" : "payment", line_items: lineItems, customer_email: proposal.customerEmail || undefined, metadata, subscription_data: totalMrc > 0 ? { metadata } : undefined, success_url: `${process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"}/p/${encodeURIComponent(req.params.token)}?payment=success&session_id={CHECKOUT_SESSION_ID}`, cancel_url: `${process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"}/p/${encodeURIComponent(req.params.token)}?payment=cancelled` });
+    const timestamp = new Date().toISOString(); await supabaseServer.from("bos_records").upsert({ workspace_id: supabaseWorkspaceId, collection_name: "proposals", record_id: proposal.id, data: { ...proposal, paymentStatus: "checkout_created", stripeCheckoutSessionId: session.id, updatedAt: timestamp }, is_soft_deleted: false, updated_at: timestamp }, { onConflict: "workspace_id,collection_name,record_id" });
+    return res.json({ checkoutUrl: session.url });
+  } catch (error: any) { console.error("Stripe Checkout creation failed", error); return res.status(503).json({ error: error?.message || "Checkout could not be created" }); }
 });
 
 const acceptanceSchema = z.object({

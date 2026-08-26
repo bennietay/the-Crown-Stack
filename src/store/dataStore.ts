@@ -1,11 +1,15 @@
 import { create } from 'zustand';
-import { Lead, Opportunity, Customer, Ticket, FollowUpTask, Product, Proposal, DiamondProspect, DiamondCustomer, DiamondFollowUp, RevenueEvent, AffiliateRecord, EtsyRecord } from '../types';
+import { Lead, Opportunity, Customer, Ticket, FollowUpTask, Product, Proposal, DiamondProspect, DiamondCustomer, DiamondFollowUp, RevenueEvent, AffiliateRecord, EtsyRecord, RevenueGoal, MoneyTask, NotificationRecord, AutomationDefinition, ActivityRecord, DiamondProduct, DiamondPurchase, DiamondScript, PrintifyRecord, EtsyProduct } from '../types';
 import { supabase } from '../supabase';
 
 interface DataState {
   leads: Lead[]; opportunities: Opportunity[]; customers: Customer[]; tickets: Ticket[]; products: Product[]; proposals: Proposal[]; tasks: FollowUpTask[];
   diamondProspects: DiamondProspect[]; diamondCustomers: DiamondCustomer[]; diamondFollowUps: DiamondFollowUp[];
+  diamondProducts: DiamondProduct[]; diamondPurchases: DiamondPurchase[]; diamondScripts: DiamondScript[];
   revenueEvents: RevenueEvent[]; affiliateRecords: AffiliateRecord[]; etsyRecords: EtsyRecord[];
+  printifyRecords: PrintifyRecord[];
+  etsyProducts: EtsyProduct[];
+  revenueGoals: RevenueGoal[]; moneyTasks: MoneyTask[]; notifications: NotificationRecord[]; automations: AutomationDefinition[]; activityRecords: ActivityRecord[];
   loading: boolean; activeWorkspaceId: string | null;
   initWorkspace: (workspaceId: string) => () => void;
   addLead: (lead: Omit<Lead, 'id' | 'createdAt' | 'updatedAt'>) => Promise<string>;
@@ -24,11 +28,22 @@ interface DataState {
   addRevenueEvent: (event: Omit<RevenueEvent, 'id' | 'createdAt'>) => Promise<void>;
   addAffiliateRecord: (record: Omit<AffiliateRecord, 'id' | 'createdAt'>) => Promise<void>;
   addEtsyRecord: (record: Omit<EtsyRecord, 'id' | 'createdAt'>) => Promise<void>;
+  addEtsyProduct: (product: Omit<EtsyProduct, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
+  updateEtsyProduct: (id: string, updates: Partial<EtsyProduct>) => Promise<void>;
+  addRevenueGoal: (goal: Omit<RevenueGoal, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
+  updateRevenueGoal: (id: string, updates: Partial<RevenueGoal>) => Promise<void>;
+  addMoneyTask: (task: Omit<MoneyTask, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
+  updateMoneyTask: (id: string, updates: Partial<MoneyTask>) => Promise<void>;
+  addNotification: (notification: Omit<NotificationRecord, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
+  updateNotification: (id: string, updates: Partial<NotificationRecord>) => Promise<void>;
+  addAutomation: (automation: Omit<AutomationDefinition, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
+  updateAutomation: (id: string, updates: Partial<AutomationDefinition>) => Promise<void>;
+  addActivity: (activity: Omit<ActivityRecord, 'id' | 'createdAt'>) => Promise<void>;
 }
 
 const now = () => new Date().toISOString();
 const makeId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
-const collectionState: Record<string, string> = { leads: 'leads', opportunities: 'opportunities', customers: 'customers', tickets: 'tickets', products: 'products', proposals: 'proposals', tasks: 'tasks', diamondProspects: 'diamond_prospects', diamondCustomers: 'diamond_customers', diamondFollowUps: 'diamond_followups', revenueEvents: 'revenue_events', affiliateRecords: 'affiliate_records', etsyRecords: 'etsy_records' };
+const collectionState: Record<string, string> = { leads: 'leads', opportunities: 'opportunities', customers: 'customers', tickets: 'tickets', products: 'products', proposals: 'proposals', tasks: 'tasks', diamondProspects: 'diamond_prospects', diamondCustomers: 'diamond_customers', diamondFollowUps: 'diamond_followups', diamondProducts: 'diamond_products', diamondPurchases: 'diamond_purchases', diamondScripts: 'diamond_scripts', revenueEvents: 'revenue_events', affiliateRecords: 'affiliate_records', etsyRecords: 'etsy_records', etsyProducts: 'etsy_products', printifyRecords: 'printify_records', revenueGoals: 'revenue_goals', moneyTasks: 'money_tasks', notifications: 'notifications', automations: 'automations', activityRecords: 'activity_records' };
 
 async function listCollection(workspaceId: string, collectionName: string) {
   const { data, error } = await supabase.from('bos_records').select('record_id,data').eq('workspace_id', workspaceId).eq('collection_name', collectionName).eq('is_soft_deleted', false);
@@ -47,15 +62,15 @@ async function softDelete(workspaceId: string, collectionName: string, id: strin
 }
 
 export const useDataStore = create<DataState>((set, get) => ({
-  leads: [], opportunities: [], customers: [], tickets: [], products: [], proposals: [], tasks: [], diamondProspects: [], diamondCustomers: [], diamondFollowUps: [], revenueEvents: [], affiliateRecords: [], etsyRecords: [], loading: false, activeWorkspaceId: null,
+  leads: [], opportunities: [], customers: [], tickets: [], products: [], proposals: [], tasks: [], diamondProspects: [], diamondCustomers: [], diamondFollowUps: [], diamondProducts: [], diamondPurchases: [], diamondScripts: [], revenueEvents: [], affiliateRecords: [], etsyRecords: [], etsyProducts: [], printifyRecords: [], revenueGoals: [], moneyTasks: [], notifications: [], automations: [], activityRecords: [], loading: false, activeWorkspaceId: null,
 
   initWorkspace: (workspaceId) => {
     set({ loading: true, activeWorkspaceId: workspaceId });
     let cancelled = false;
-    void Promise.all(Object.keys(collectionState).map(async collectionName => {
+    void Promise.all(Object.entries(collectionState).map(async ([stateKey, collectionName]) => {
       try {
         const rows = await listCollection(workspaceId, collectionName);
-        if (!cancelled) set({ [collectionState[collectionName]]: rows } as Partial<DataState>);
+        if (!cancelled) set({ [stateKey]: rows } as Partial<DataState>);
       } catch (error) { console.error(`Error fetching ${collectionName}:`, error); }
     })).finally(() => { if (!cancelled) set({ loading: false }); });
     const channel = supabase.channel(`bos-records-${workspaceId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'bos_records', filter: `workspace_id=eq.${workspaceId}` }, () => {
@@ -87,4 +102,15 @@ export const useDataStore = create<DataState>((set, get) => ({
   addRevenueEvent: async (value) => { const id = makeId('revenue'); await writeRecord(value.workspaceId, 'revenue_events', id, { ...value, id, createdAt: now() }); },
   addAffiliateRecord: async (value) => { const id = makeId('affiliate'); await writeRecord(value.workspaceId, 'affiliate_records', id, { ...value, id, createdAt: now() }); },
   addEtsyRecord: async (value) => { const id = makeId('etsy'); await writeRecord(value.workspaceId, 'etsy_records', id, { ...value, id, createdAt: now() }); },
+  addEtsyProduct: async (value) => { const id = makeId('etsy-product'); const timestamp = now(); await writeRecord(value.workspaceId, 'etsy_products', id, { ...value, id, createdAt: timestamp, updatedAt: timestamp }); },
+  updateEtsyProduct: async (id, updates) => { const ws = get().activeWorkspaceId; if (!ws) throw new Error('Workspace is not selected'); await writeRecord(ws, 'etsy_products', id, { ...(get().etsyProducts.find(row => row.id === id) || {}), ...updates, id, updatedAt: now() }); },
+  addRevenueGoal: async (value) => { const id = makeId('goal'); const timestamp = now(); await writeRecord(value.workspaceId, 'revenue_goals', id, { ...value, id, createdAt: timestamp, updatedAt: timestamp }); },
+  updateRevenueGoal: async (id, updates) => { const ws = get().activeWorkspaceId; if (!ws) throw new Error('Workspace is not selected'); await writeRecord(ws, 'revenue_goals', id, { ...(get().revenueGoals.find(row => row.id === id) || {}), ...updates, id, updatedAt: now() }); },
+  addMoneyTask: async (value) => { const id = makeId('money-task'); const timestamp = now(); await writeRecord(value.workspaceId, 'money_tasks', id, { ...value, id, createdAt: timestamp, updatedAt: timestamp }); },
+  updateMoneyTask: async (id, updates) => { const ws = get().activeWorkspaceId; if (!ws) throw new Error('Workspace is not selected'); await writeRecord(ws, 'money_tasks', id, { ...(get().moneyTasks.find(row => row.id === id) || {}), ...updates, id, updatedAt: now() }); },
+  addNotification: async (value) => { const id = makeId('notification'); const timestamp = now(); await writeRecord(value.workspaceId, 'notifications', id, { ...value, id, createdAt: timestamp, updatedAt: timestamp }); },
+  updateNotification: async (id, updates) => { const ws = get().activeWorkspaceId; if (!ws) throw new Error('Workspace is not selected'); await writeRecord(ws, 'notifications', id, { ...(get().notifications.find(row => row.id === id) || {}), ...updates, id, updatedAt: now() }); },
+  addAutomation: async (value) => { const id = makeId('automation'); const timestamp = now(); await writeRecord(value.workspaceId, 'automations', id, { ...value, id, createdAt: timestamp, updatedAt: timestamp }); },
+  updateAutomation: async (id, updates) => { const ws = get().activeWorkspaceId; if (!ws) throw new Error('Workspace is not selected'); await writeRecord(ws, 'automations', id, { ...(get().automations.find(row => row.id === id) || {}), ...updates, id, updatedAt: now() }); },
+  addActivity: async (value) => { const id = makeId('activity'); await writeRecord(value.workspaceId, 'activity_records', id, { ...value, id, createdAt: now() }); },
 }));

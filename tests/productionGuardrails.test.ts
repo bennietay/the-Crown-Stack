@@ -17,12 +17,16 @@ test("production login contains no demo role picker, credentials or registration
 
 test("production server fails closed and exposes separate health endpoints", () => {
   const server = read("server.ts");
+  const supabase = read("src/server/supabase.ts");
   assert.match(server, /Production startup refused: APP_MODE=live is required/);
   assert.match(server, /supabaseReady/);
   assert.match(server, /supabaseWorkspaceId/);
   assert.match(server, /app\.get\("\/healthz"/);
   assert.match(server, /app\.get\("\/readyz"/);
   assert.match(server, /app\.set\("trust proxy", 1\)/);
+  assert.match(supabase, /SUPABASE_SERVICE_ROLE_KEY/);
+  assert.match(supabase, /hasSupabaseServiceRole/);
+  assert.doesNotMatch(supabase, /supabaseServer\s*=\s*createSupabaseRequestClient\(\)/);
 });
 
 test("lead capture requires a durable create response and has no fake CTA", () => {
@@ -51,9 +55,21 @@ test("production revenue core contains no demo auth or simulated payment claims"
   assert.match(read("server.ts"), /supabaseServer/);
 });
 
-test("server exposes only the supported production API surface", () => {
+test("Stripe Checkout uses persisted proposal totals and verifies raw webhooks", () => {
   const server = read("server.ts");
-  assert.doesNotMatch(server, /\/api\/(ai|fulfilment|automation|customer-portal|reconciliation)/);
+  assert.match(server, /express\.raw\(\{ type: "application\/json"/);
+  assert.match(server, /stripe\.webhooks\.constructEvent\(req\.body, signature, webhookSecret\)/);
+  assert.match(server, /Number\(proposal\.totalOTC \|\| 0\)/);
+  assert.match(server, /Number\(proposal\.totalMRC \|\| 0\)/);
+  assert.match(server, /checkout\.sessions\.create/);
+  assert.doesNotMatch(server, /unit_amount:\s*req\.body/);
+  assert.ok(server.indexOf('app.post("/api/webhooks/stripe"') < server.indexOf('app.use(express.json'));
+});
+
+test("expanded production API remains fail-closed", () => {
+  const server = read("server.ts");
+  assert.match(server, /\/api\/ai\/daily-brief/);
+  assert.match(server, /authenticateUser, requireWorkspace\(\), requireRole/);
   assert.match(server, /app\.all\("\/api\/\*"/);
 });
 

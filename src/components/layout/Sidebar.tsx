@@ -15,14 +15,23 @@ import {
   Gem,
   Coins,
   BriefcaseBusiness,
+  Target,
+  Bell,
+  Bot,
+  ScrollText,
+  BarChart3,
+  Sparkles,
+  ShoppingBag,
 } from "lucide-react";
 
 const bennieNavigation = [
-  { section: "Overview", items: [
-    { name: "Dashboard", href: "/", icon: LayoutDashboard },
-    { name: "Work Queue", href: "/queue", icon: CheckSquare },
+  { section: "Command Center", items: [
+    { name: "Overview", href: "/", icon: LayoutDashboard },
+    { name: "Money Tasks", href: "/money-tasks", icon: CheckSquare },
     { name: "Revenue Ledger", href: "/revenue", icon: Coins },
-    { name: "Growth Operations", href: "/businesses", icon: BriefcaseBusiness },
+    { name: "Goals", href: "/goals", icon: Target },
+    { name: "Analytics", href: "/analytics", icon: BarChart3 },
+    { name: "Daily CEO Brief", href: "/brief", icon: Sparkles },
   ]},
   { section: "Sales", items: [
     { name: "Leads", href: "/leads", icon: Users },
@@ -35,9 +44,18 @@ const bennieNavigation = [
     { name: "Support Tickets", href: "/tickets", icon: LifeBuoy },
   ]},
   { section: "Businesses", items: [
-    { name: "Diamond Path", href: "/diamond", icon: Gem },
+    { name: "WAAS", href: "/leads", icon: BriefcaseBusiness },
+    { name: "Etsy", href: "/etsy", icon: ShoppingBag },
+    { name: "Affiliate", href: "/businesses", icon: BriefcaseBusiness },
+    { name: "Amway", href: "/diamond", icon: Gem },
   ]},
-  { section: "Workspace", items: [
+  { section: "Operations", items: [
+    { name: "Work Queue", href: "/queue", icon: CheckSquare },
+    { name: "Automations", href: "/automations", icon: Bot },
+    { name: "Notifications", href: "/notifications", icon: Bell },
+  ]},
+  { section: "System", items: [
+    { name: "Activity", href: "/activity", icon: ScrollText },
     { name: "Settings", href: "/settings", icon: Settings },
   ]}
 ];
@@ -60,13 +78,13 @@ export function Sidebar({ onClose, className }: SidebarProps) {
       return true;
     }
     if (activeRole === "sales") {
-      return ["/", "/queue", "/revenue", "/businesses", "/leads", "/pipeline", "/proposals", "/products", "/customers", "/diamond"].includes(href);
+      return ["/", "/queue", "/money-tasks", "/revenue", "/goals", "/analytics", "/brief", "/businesses", "/etsy", "/leads", "/pipeline", "/proposals", "/products", "/customers", "/diamond", "/notifications"].includes(href);
     }
     if (activeRole === "operations") {
-      return ["/", "/queue", "/revenue", "/businesses", "/products", "/customers", "/tickets", "/diamond"].includes(href);
+      return ["/", "/queue", "/money-tasks", "/revenue", "/goals", "/analytics", "/brief", "/businesses", "/etsy", "/products", "/customers", "/tickets", "/diamond", "/notifications"].includes(href);
     }
     if (activeRole === "support") {
-      return ["/", "/customers", "/tickets", "/diamond"].includes(href);
+      return ["/", "/customers", "/tickets", "/diamond", "/notifications"].includes(href);
     }
     if (activeRole === "customer") {
       return false;

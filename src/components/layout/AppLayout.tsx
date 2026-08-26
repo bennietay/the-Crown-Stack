@@ -1,5 +1,5 @@
 import React, { ReactNode, useState, useEffect } from "react";
-import { Link, useLocation } from "@/src/lib/router";
+import { Link, useLocation, useNavigate } from "@/src/lib/router";
 import { Sidebar } from "./Sidebar";
 import { 
   Settings,
@@ -19,12 +19,26 @@ import { cn } from "@/src/lib/utils";
 export function AppLayout({ children }: { children: ReactNode }) {
   const workspace = useAuthStore(state => state.workspace);
   const initWorkspace = useDataStore(state => state.initWorkspace);
+  const data = useDataStore();
   const fetchSettings = useSettingsStore(state => state.fetchSettings);
   const settingsLoading = useSettingsStore(state => state.loading);
   const settingsError = useSettingsStore(state => state.error);
   const location = useLocation();
+  const navigate = useNavigate();
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const searchResults = normalizedSearch.length < 2 ? [] : [
+    ...data.leads.map(row => ({ id: row.id, type: "Lead", title: row.contactName, detail: row.companyName || row.email, href: "/leads" })),
+    ...data.opportunities.map(row => ({ id: row.id, type: "Opportunity", title: row.name || row.title || "Opportunity", detail: row.stage, href: "/pipeline" })),
+    ...data.proposals.map(row => ({ id: row.id, type: "Proposal", title: row.title || row.id, detail: row.status, href: "/proposals" })),
+    ...data.customers.map(row => ({ id: row.id, type: "Customer", title: row.name, detail: row.email, href: "/customers" })),
+    ...data.diamondProspects.map(row => ({ id: row.id, type: "Amway", title: row.name, detail: row.prospectType, href: "/diamond" })),
+    ...data.etsyProducts.map(row => ({ id: row.id, type: "Etsy", title: row.internalName, detail: `${row.niche} · ${row.status}`, href: "/etsy" })),
+  ].filter(row => `${row.title} ${row.detail} ${row.type}`.toLowerCase().includes(normalizedSearch)).slice(0, 8);
+
+  const openSearchResult = (href: string) => { setSearchQuery(""); navigate(href); };
 
   useEffect(() => {
     if (workspace?.id) {
@@ -88,7 +102,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
           <div className="flex items-center gap-1.5 sm:gap-3">
             <div className="relative hidden xl:flex items-center rounded-full bg-slate-100 px-3.5 py-1.5">
               <Search className="h-3.5 w-3.5 text-slate-400" />
-              <input type="text" placeholder="Search..." className="ml-2 w-40 bg-transparent text-xs focus:outline-none" />
+              <input type="search" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && searchResults[0]) openSearchResult(searchResults[0].href); if (event.key === "Escape") setSearchQuery(""); }} placeholder="Search workspace…" aria-label="Search workspace" className="ml-2 w-40 bg-transparent text-xs focus:outline-none" />
+              {normalizedSearch.length >= 2 && <div className="absolute right-0 top-10 z-50 w-96 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">{searchResults.length ? searchResults.map(result => <button key={`${result.type}-${result.id}`} type="button" onClick={() => openSearchResult(result.href)} className="flex w-full items-start justify-between gap-3 border-b border-slate-100 px-4 py-3 text-left last:border-0 hover:bg-slate-50"><div><p className="text-sm font-semibold text-slate-900">{result.title}</p><p className="text-xs text-slate-500">{result.detail}</p></div><span className="rounded-full bg-indigo-50 px-2 py-1 text-[10px] font-bold text-indigo-700">{result.type}</span></button>) : <p className="p-5 text-center text-xs text-slate-500">No workspace record matches “{searchQuery}”.</p>}</div>}
             </div>
 
             <Link

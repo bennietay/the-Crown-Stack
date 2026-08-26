@@ -48,7 +48,12 @@ const ProposalView = lazyWithChunkRecovery(() => import("./pages/ProposalView").
 const DiamondPath = lazyWithChunkRecovery(() => import("./pages/DiamondPath").then(module => ({ default: module.DiamondPath })), "diamond-path");
 const Revenue = lazyWithChunkRecovery(() => import("./pages/Revenue").then(module => ({ default: module.Revenue })), "revenue");
 const BusinessHub = lazyWithChunkRecovery(() => import("./pages/BusinessHub").then(module => ({ default: module.BusinessHub })), "business-hub");
-const AffiliateLanding = lazyWithChunkRecovery(() => import("./pages/AffiliateLanding").then(module => ({ default: module.AffiliateLanding })), "affiliate-landing");
+const Goals = lazyWithChunkRecovery(() => import("./pages/Goals").then(module => ({ default: module.Goals })), "goals");
+const MoneyTasks = lazyWithChunkRecovery(() => import("./pages/MoneyTasks").then(module => ({ default: module.MoneyTasks })), "money-tasks");
+const Analytics = lazyWithChunkRecovery(() => import("./pages/Analytics").then(module => ({ default: module.Analytics })), "analytics");
+const OperationsControl = lazyWithChunkRecovery(() => import("./pages/OperationsControl").then(module => ({ default: module.OperationsControl })), "operations-control");
+const DailyBrief = lazyWithChunkRecovery(() => import("./pages/DailyBrief").then(module => ({ default: module.DailyBrief })), "daily-brief");
+const EtsyOperations = lazyWithChunkRecovery(() => import("./pages/EtsyOperations").then(module => ({ default: module.EtsyOperations })), "etsy-operations");
 
 const ADMIN: Role[] = ["super_admin", "workspace_admin"];
 const SALES: Role[] = [...ADMIN, "sales"];
@@ -67,6 +72,7 @@ function PrivatePage({ pathname, activeRole }: { pathname: string; activeRole: R
   const routes: Record<string, { element: ReactNode; roles: Role[] }> = {
     "/": { element: <Dashboard />, roles: STAFF },
     "/queue": { element: <WorkQueue />, roles: REVENUE_OPERATIONS },
+    "/money-tasks": { element: <MoneyTasks />, roles: REVENUE_OPERATIONS },
     "/leads": { element: <Leads />, roles: SALES },
     "/pipeline": { element: <Pipeline />, roles: SALES },
     "/proposals": { element: <Proposals />, roles: SALES },
@@ -74,7 +80,14 @@ function PrivatePage({ pathname, activeRole }: { pathname: string; activeRole: R
     "/customers": { element: <Customers />, roles: STAFF },
     "/diamond": { element: <DiamondPath />, roles: STAFF },
     "/revenue": { element: <Revenue />, roles: REVENUE_OPERATIONS },
+    "/goals": { element: <Goals />, roles: REVENUE_OPERATIONS },
+    "/analytics": { element: <Analytics />, roles: REVENUE_OPERATIONS },
+    "/brief": { element: <DailyBrief />, roles: REVENUE_OPERATIONS },
     "/businesses": { element: <BusinessHub />, roles: REVENUE_OPERATIONS },
+    "/etsy": { element: <EtsyOperations />, roles: REVENUE_OPERATIONS },
+    "/automations": { element: <OperationsControl view="automations" />, roles: ADMIN },
+    "/notifications": { element: <OperationsControl view="notifications" />, roles: STAFF },
+    "/activity": { element: <OperationsControl view="activity" />, roles: ADMIN },
     "/tickets": { element: <Tickets />, roles: STAFF },
     "/settings": { element: <Settings />, roles: ADMIN },
     "/unauthorized": { element: <Unauthorized />, roles: STAFF },
@@ -94,7 +107,6 @@ function ApplicationRoutes() {
   const clearError = useAuthStore(state => state.clearError);
 
   if (pathname === "/capture") return <LeadCapture />;
-  if (pathname === "/affiliate") return <AffiliateLanding />;
   if (pathname.startsWith("/p/")) return <ProposalView />;
 
   if (loading) return <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm font-medium text-slate-500">Loading application…</div>;

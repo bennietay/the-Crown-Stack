@@ -83,11 +83,11 @@ export function Settings() {
       </div>
       {configured ? (
         <span className="flex items-center text-[11px] font-bold text-emerald-800 bg-emerald-100/80 px-2.5 py-1 rounded-full border border-emerald-300/60 shadow-2xs">
-          <CheckCircle2 className="w-3.5 h-3.5 mr-1 text-emerald-600" /> Active
+          <CheckCircle2 className="w-3.5 h-3.5 mr-1 text-emerald-600" /> Configured
         </span>
       ) : (
         <span className="flex items-center text-[11px] font-bold text-amber-800 bg-amber-100/80 px-2.5 py-1 rounded-full border border-amber-300/60 shadow-2xs">
-          <AlertCircle className="w-3.5 h-3.5 mr-1 text-amber-600" /> Standby
+          <AlertCircle className="w-3.5 h-3.5 mr-1 text-amber-600" /> Not configured
         </span>
       )}
     </div>
@@ -624,12 +624,12 @@ export function Settings() {
                 <Server className="w-4 h-4" />
                 <span className="text-xs font-bold uppercase tracking-wider">Secure provider setup</span>
               </div>
-              <CardTitle className="text-base font-bold text-slate-900">Integration readiness</CardTitle>
-              <CardDescription className="text-xs">Secrets are configured in Vercel environment variables, never entered or stored in this browser.</CardDescription>
+              <CardTitle className="text-base font-bold text-slate-900">Integration configuration</CardTitle>
+              <CardDescription className="text-xs">This view confirms that required settings exist. It does not claim that a provider transaction has succeeded.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-xs leading-relaxed text-blue-950">
-                Status is checked from the live deployment environment. Supabase is the production backend; WhatsApp click-to-chat is free and recommended first. Payments, email automation and WhatsApp API activate automatically when their server-side secrets are added.
+                Configuration is read from the live deployment environment. Supabase is the production backend and WhatsApp click-to-chat is the free manual option. Provider credentials must still pass an end-to-end transaction test before the integration is considered operational.
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <IntegrationStatus name="Supabase" configured={!!localSettings.integrations?.supabaseConfigured} subtitle="Authentication and durable CRM data" />
@@ -637,12 +637,19 @@ export function Settings() {
                 <IntegrationStatus name="WhatsApp Business API" configured={!!localSettings.integrations?.whatsappApiConfigured} subtitle="Automated outbound messages" />
                 <IntegrationStatus name="Online payments" configured={!!localSettings.integrations?.paymentsConfigured} subtitle="Stripe Checkout and webhooks" />
                 <IntegrationStatus name="Transactional email" configured={!!localSettings.integrations?.emailConfigured} subtitle="Resend delivery and notifications" />
+                <IntegrationStatus name="Affiliate operations API" configured={!!localSettings.integrations?.affiliateApiConfigured} subtitle="Secure server-to-server event ingestion" />
+                <IntegrationStatus name="Etsy Open API" configured={!!localSettings.integrations?.etsyConfigured} subtitle="OAuth connection, listings and orders" />
+                <IntegrationStatus name="Printify" configured={!!localSettings.integrations?.printifyConfigured} subtitle="Products, fulfilment and tracking" />
+                <IntegrationStatus name="Gemini AI" configured={!!localSettings.integrations?.aiConfigured} subtitle="Evidence-bound CEO briefs and approved AI jobs" />
               </div>
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">
                 <p className="font-bold text-slate-900">Deployment secret names</p>
                 <p className="mt-1 font-mono text-[11px] break-words">SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY / PUBLIC_WHATSAPP_URL</p>
                 <p className="mt-1 font-mono text-[11px] break-words">STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET / RESEND_API_KEY / EMAIL_FROM</p>
                 <p className="mt-1 font-mono text-[11px] break-words">WHATSAPP_ACCESS_TOKEN / WHATSAPP_PHONE_NUMBER_ID</p>
+                <p className="mt-1 font-mono text-[11px] break-words">AFFILIATE_INGEST_API_KEY / CREDENTIAL_ENCRYPTION_KEY</p>
+                <p className="mt-1 font-mono text-[11px] break-words">ETSY_API_KEY / ETSY_SHARED_SECRET / ETSY_REDIRECT_URI / PRINTIFY_API_TOKEN</p>
+                <p className="mt-1 font-mono text-[11px] break-words">GEMINI_API_KEY / GEMINI_MODEL</p>
                 <p className="mt-2">Changing a secret later requires no code change—update the deployment environment and redeploy.</p>
               </div>
             </CardContent>
