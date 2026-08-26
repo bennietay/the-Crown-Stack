@@ -14,6 +14,7 @@ import {
   LogOut,
   Gem,
   Coins,
+  BriefcaseBusiness,
 } from "lucide-react";
 
 const bennieNavigation = [
@@ -21,6 +22,7 @@ const bennieNavigation = [
     { name: "Dashboard", href: "/", icon: LayoutDashboard },
     { name: "Work Queue", href: "/queue", icon: CheckSquare },
     { name: "Revenue Ledger", href: "/revenue", icon: Coins },
+    { name: "Growth Operations", href: "/businesses", icon: BriefcaseBusiness },
   ]},
   { section: "Sales", items: [
     { name: "Leads", href: "/leads", icon: Users },
@@ -58,10 +60,10 @@ export function Sidebar({ onClose, className }: SidebarProps) {
       return true;
     }
     if (activeRole === "sales") {
-      return ["/", "/queue", "/revenue", "/leads", "/pipeline", "/proposals", "/products", "/customers", "/diamond"].includes(href);
+      return ["/", "/queue", "/revenue", "/businesses", "/leads", "/pipeline", "/proposals", "/products", "/customers", "/diamond"].includes(href);
     }
     if (activeRole === "operations") {
-      return ["/", "/queue", "/revenue", "/products", "/customers", "/tickets", "/diamond"].includes(href);
+      return ["/", "/queue", "/revenue", "/businesses", "/products", "/customers", "/tickets", "/diamond"].includes(href);
     }
     if (activeRole === "support") {
       return ["/", "/customers", "/tickets", "/diamond"].includes(href);
