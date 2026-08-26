@@ -12,6 +12,7 @@ import { Button } from "@/src/components/ui/button";
 import { Badge } from "@/src/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/src/components/ui/card";
 import { revenueByBusiness, summarizeRevenue } from "@/src/lib/revenue";
+import { businessTopology } from "@/src/store/businessStore";
 
 export function Dashboard() {
   const workspace = useAuthStore(state => state.workspace);
@@ -244,6 +245,8 @@ export function Dashboard() {
         <BusinessSnapshot title="Affiliate" href="/businesses" primary={`${affiliateRecords.filter(item => item.workspaceId === workspace?.id).length.toLocaleString()} tracked records`} secondary={`${affiliateRecords.filter(item => item.workspaceId === workspace?.id && item.kind === "commission").length.toLocaleString()} commission records`} />
         <BusinessSnapshot title="Amway" href="/diamond" primary={`${diamondProspects.filter(item => item.workspaceId === workspace?.id).length.toLocaleString()} prospects`} secondary={`${diamondCustomers.filter(item => item.workspaceId === workspace?.id).length.toLocaleString()} customers`} />
       </div>
+
+      <div className="rounded-xl border border-slate-200 bg-white p-4"><div className="flex flex-wrap items-end justify-between gap-2"><div><h3 className="font-bold text-slate-900">Revenue OS topology</h3><p className="text-xs text-slate-500">Select a business in the left rail to work its monetization loop.</p></div><span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">One command centre · four engines</span></div><div className="mt-4 grid gap-3 md:grid-cols-4">{businessTopology.map(business => <Link key={business.id} to={business.href} className="rounded-lg border border-slate-200 p-3 transition hover:border-indigo-300 hover:bg-indigo-50/30"><div className="flex items-center justify-between"><p className="text-xs font-extrabold uppercase tracking-[0.14em] text-indigo-600">{business.shortName}</p><ArrowRight className="h-3.5 w-3.5 text-slate-300" /></div><p className="mt-2 text-xs font-semibold text-slate-800">{business.monetization}</p><div className="mt-3 space-y-1">{business.nav.slice(0, 4).map((item, index) => <div key={item.name} className="flex items-center gap-2 text-[11px] text-slate-500"><span className="flex h-4 w-4 items-center justify-center rounded-full bg-slate-100 text-[9px] font-bold text-slate-500">{index + 1}</span>{item.name}</div>)}</div></Link>)}</div></div>
 
       <div className="grid gap-4 xl:grid-cols-[1.35fr_1fr]">
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
