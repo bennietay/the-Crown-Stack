@@ -61,7 +61,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
     const routeContext = location.pathname === "/" ? "all"
       : location.pathname === "/leads" ? "waas"
       : location.pathname === "/etsy" ? "etsy"
-      : location.pathname === "/businesses" ? "affiliate"
       : location.pathname === "/diamond" ? "amway"
       : null;
     if (routeContext && routeContext !== activeBusiness) setActiveBusiness(routeContext);
