@@ -48,6 +48,7 @@ const ProposalView = lazyWithChunkRecovery(() => import("./pages/ProposalView").
 const DiamondPath = lazyWithChunkRecovery(() => import("./pages/DiamondPath").then(module => ({ default: module.DiamondPath })), "diamond-path");
 const Revenue = lazyWithChunkRecovery(() => import("./pages/Revenue").then(module => ({ default: module.Revenue })), "revenue");
 const BusinessHub = lazyWithChunkRecovery(() => import("./pages/BusinessHub").then(module => ({ default: module.BusinessHub })), "business-hub");
+const AffiliateLanding = lazyWithChunkRecovery(() => import("./pages/AffiliateLanding").then(module => ({ default: module.AffiliateLanding })), "affiliate-landing");
 
 const ADMIN: Role[] = ["super_admin", "workspace_admin"];
 const SALES: Role[] = [...ADMIN, "sales"];
@@ -93,6 +94,7 @@ function ApplicationRoutes() {
   const clearError = useAuthStore(state => state.clearError);
 
   if (pathname === "/capture") return <LeadCapture />;
+  if (pathname === "/affiliate") return <AffiliateLanding />;
   if (pathname.startsWith("/p/")) return <ProposalView />;
 
   if (loading) return <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm font-medium text-slate-500">Loading application…</div>;

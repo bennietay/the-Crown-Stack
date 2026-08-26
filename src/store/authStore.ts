@@ -104,7 +104,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       try {
         const resolved = await resolveUserRecord(sessionUser);
         if (version !== hydrateVersion) return;
-        set({ user: resolved.userObj, workspaces: resolved.workspaces, workspaceRoles: resolved.workspaceRoles, workspace: resolved.workspaces[0] || null, loading: false, error: null });
+        const preferredWorkspaceId = window.localStorage.getItem('bennie.activeWorkspaceId');
+        const activeWorkspace = resolved.workspaces.find(item => item.id === preferredWorkspaceId) || resolved.workspaces[0] || null;
+        set({ user: { ...resolved.userObj, activeWorkspaceId: activeWorkspace?.id }, workspaces: resolved.workspaces, workspaceRoles: resolved.workspaceRoles, workspace: activeWorkspace, loading: false, error: null });
       } catch (error) {
         console.error('[auth] workspace hydration failed', error instanceof Error ? error.message : error);
         if (version !== hydrateVersion) return;
@@ -138,7 +140,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
     try {
       const resolved = await resolveUserRecord(data.user);
-      set({ user: resolved.userObj, workspaces: resolved.workspaces, workspaceRoles: resolved.workspaceRoles, workspace: resolved.workspaces[0] || null, loading: false, error: null });
+      const preferredWorkspaceId = window.localStorage.getItem('bennie.activeWorkspaceId');
+      const activeWorkspace = resolved.workspaces.find(item => item.id === preferredWorkspaceId) || resolved.workspaces[0] || null;
+      set({ user: { ...resolved.userObj, activeWorkspaceId: activeWorkspace?.id }, workspaces: resolved.workspaces, workspaceRoles: resolved.workspaceRoles, workspace: activeWorkspace, loading: false, error: null });
     } catch (error) {
       console.error('[auth] sign-in workspace hydration failed', error instanceof Error ? error.message : error);
       set({ loading: false, error: error instanceof Error ? error.message : 'Account access denied' });
@@ -159,6 +163,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   setWorkspace: (workspaceId) => {
     const workspace = get().workspaces.find(w => w.id === workspaceId);
-    if (workspace) set({ workspace });
+    if (workspace) { window.localStorage.setItem('bennie.activeWorkspaceId', workspaceId); set({ workspace, user: get().user ? { ...get().user!, activeWorkspaceId: workspaceId } : null }); }
   },
 }));
