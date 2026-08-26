@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, CalendarDays, Check, CheckCircle2, Clock3, Loader2, LockKeyhole, MessageCircle } from "lucide-react";
 import { Button } from "@/src/components/ui/button";
 import { Card, CardContent } from "@/src/components/ui/card";
+import { supabaseWorkspaceId } from "@/src/supabase";
 
 type FormState = {
   name: string; company: string; email: string; phone: string; country: string;
@@ -25,7 +26,7 @@ export function LeadCapture() {
   const [settings, setSettings] = useState<any>(null);
   const [formData, setFormData] = useState<FormState>(EMPTY_FORM);
 
-  const workspaceId = useMemo(() => new URLSearchParams(window.location.search).get("workspace") || "ws-bennie", []);
+  const workspaceId = useMemo(() => new URLSearchParams(window.location.search).get("workspace") || supabaseWorkspaceId, []);
 
   useEffect(() => {
     fetch(`/api/settings/${encodeURIComponent(workspaceId)}/public`)

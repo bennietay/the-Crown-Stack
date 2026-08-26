@@ -11,10 +11,11 @@ import {
 import { Button } from "@/src/components/ui/button";
 import { Badge } from "@/src/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/src/components/ui/card";
+import { revenueByBusiness, summarizeRevenue } from "@/src/lib/revenue";
 
 export function Dashboard() {
   const workspace = useAuthStore(state => state.workspace);
-  const { leads, opportunities, proposals, tasks, customers, tickets } = useDataStore();
+  const { leads, opportunities, proposals, tasks, customers, tickets, revenueEvents, revenueGoals, moneyTasks, notifications } = useDataStore();
   const settings = useSettingsStore(state => state.settings);
 
   const [timeFilter, setTimeFilter] = useState<"today" | "week" | "overdue" | "high_value">("today");
@@ -31,14 +32,29 @@ export function Dashboard() {
   const currency = settings?.business?.currency || 'USD';
   const target = settings?.business?.monthlyTarget || 100000;
   const now = new Date();
+  const workspaceRevenue = revenueEvents.filter(event => event.workspaceId === workspace?.id);
+  const todayKey = now.toISOString().slice(0, 10); const monthKey = todayKey.slice(0, 7);
+  const todayRevenue = summarizeRevenue(workspaceRevenue.filter(event => event.occurredAt.slice(0, 10) === todayKey));
+  const monthRevenue = summarizeRevenue(workspaceRevenue.filter(event => event.occurredAt.slice(0, 7) === monthKey));
+  const totalRevenue = summarizeRevenue(workspaceRevenue);
+  const businessPerformance = revenueByBusiness(workspaceRevenue);
+  const activeGoal = revenueGoals.find(goal => goal.workspaceId === workspace?.id && goal.status === "active");
+  const openMoneyTasks = moneyTasks.filter(task => task.workspaceId === workspace?.id && !["completed", "dismissed"].includes(task.status)).sort((a, b) => {
+    const aImpact = a.estimatedRevenueImpact !== undefined && a.probability !== undefined ? a.estimatedRevenueImpact * a.probability / 100 : -1;
+    const bImpact = b.estimatedRevenueImpact !== undefined && b.probability !== undefined ? b.estimatedRevenueImpact * b.probability / 100 : -1;
+    return bImpact - aImpact;
+  });
+  const unreadNotifications = notifications.filter(notification => notification.workspaceId === workspace?.id && notification.status === "unread");
 
   // Metric calculations
+  const actionableLeadStatuses = new Set(["new", "qualified", "ready_for_outreach", "contacted", "replied", "discovery", "proposal", "negotiation"]);
   const uncontactedLeads = wLeads.filter(l => l.status === "new");
+  const reviewRequiredLeads = wLeads.filter(l => l.status === "imported_review_required" || l.status === "researching");
   const inSlaLeads = uncontactedLeads.filter(l => {
     const hours = (now.getTime() - new Date(l.createdAt).getTime()) / (1000 * 60 * 60);
     return hours <= (settings?.business?.leadSlaHours || 24);
   });
-  const hotLeads = wLeads.filter(l => l.temperature === "hot" || (l.score || 0) >= 80);
+  const hotLeads = wLeads.filter(l => actionableLeadStatuses.has(l.status) && (l.temperature === "hot" || (l.score || 0) >= 80));
   const activeOpps = wOpps.filter(o => !["won", "lost"].includes(o.stage.toLowerCase()));
   const weightedPipeline = activeOpps.reduce((sum, opp) => sum + ((opp.estimatedValue || opp.expectedValue || 0) * (opp.stage === "Proposal sent" ? 0.7 : 0.4)), 0);
   const expectedOTC = wProposals.filter(p => p.status === "sent").reduce((sum, p) => sum + p.totalOTC, 0);
@@ -112,6 +128,21 @@ export function Dashboard() {
       link: "/proposals"
     });
   });
+
+  // Imported prospect lists must be audited before outreach. Surface the work
+  // without treating unaudited rows as qualified or revenue-ready leads.
+  if (reviewRequiredLeads.length) {
+    priorities.push({
+      id: "p-review-imported-leads",
+      rank: 5,
+      title: `Audit ${reviewRequiredLeads.length} imported prospect${reviewRequiredLeads.length === 1 ? "" : "s"}`,
+      subtitle: "Verify the business, website condition, contact route and message before outreach.",
+      type: "lead",
+      urgencyText: "Research required",
+      urgencyColor: "bg-blue-50 text-blue-800 border-blue-200",
+      link: "/leads"
+    });
+  }
 
   // 4. Overdue tasks
   overdueTasks.forEach(t => {
@@ -192,6 +223,27 @@ export function Dashboard() {
             <Sparkles className="w-4 h-4 mr-2" /> Build today's action plan
           </Button>
         </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        <ExecutiveMetric label="Revenue today" value={`MYR ${todayRevenue.collected.toLocaleString()}`} />
+        <ExecutiveMetric label="Revenue this month" value={`MYR ${monthRevenue.collected.toLocaleString()}`} />
+        <ExecutiveMetric label="Profit today" value={`MYR ${todayRevenue.profit.toLocaleString()}`} />
+        <ExecutiveMetric label="Profit this month" value={`MYR ${monthRevenue.profit.toLocaleString()}`} />
+        <ExecutiveMetric label="Cash collected" value={`MYR ${totalRevenue.collected.toLocaleString()}`} />
+        <ExecutiveMetric label="Recurring collected" value={`MYR ${summarizeRevenue(workspaceRevenue.filter(event => event.sourceType === "subscription")).collected.toLocaleString()}`} />
+        <ExecutiveMetric label="New leads this month" value={wLeads.filter(lead => lead.createdAt.slice(0, 7) === monthKey).length.toLocaleString()} />
+        <ExecutiveMetric label="Deals / orders this month" value={workspaceRevenue.filter(event => event.occurredAt.slice(0, 7) === monthKey && ["sale", "commission"].includes(event.sourceType) && !["cancelled", "refunded"].includes(event.status)).length.toLocaleString()} />
+        <ExecutiveMetric label="Unread alerts" value={unreadNotifications.length.toLocaleString()} />
+        <ExecutiveMetric label="Goal progress" value={activeGoal ? `${Math.min(100, totalRevenue.collected / activeGoal.targetAmount * 100).toFixed(1)}%` : "No active goal"} />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[1.35fr_1fr]">
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+          <div className="border-b border-slate-100 px-4 py-3"><h3 className="font-bold text-slate-900">Revenue by business</h3><p className="text-xs text-slate-500">MYR only, or foreign currency with a recorded MYR rate.</p></div>
+          <table className="min-w-full text-left text-sm"><thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="px-4 py-2">Business</th><th className="px-4 py-2">Collected</th><th className="px-4 py-2">Booked</th><th className="px-4 py-2">Expected</th><th className="px-4 py-2">Profit</th></tr></thead><tbody>{businessPerformance.map(row => <tr key={row.businessUnit} className="border-t border-slate-100"><td className="px-4 py-3 font-bold">{row.businessUnit}</td><td className="px-4 py-3">MYR {row.collected.toLocaleString()}</td><td className="px-4 py-3">MYR {row.booked.toLocaleString()}</td><td className="px-4 py-3">MYR {row.expected.toLocaleString()}</td><td className="px-4 py-3 text-emerald-700">MYR {row.profit.toLocaleString()}</td></tr>)}</tbody></table>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4"><div className="flex items-center justify-between"><div><h3 className="font-bold text-slate-900">Highest-impact work</h3><p className="text-xs text-slate-500">Based only on saved impact and probability.</p></div><Link to="/money-tasks" className="text-xs font-bold text-indigo-600">View all</Link></div><div className="mt-3 space-y-2">{openMoneyTasks.length ? openMoneyTasks.slice(0, 5).map(task => <div key={task.id} className="rounded-lg bg-slate-50 p-3"><div className="flex justify-between gap-3"><p className="text-sm font-semibold text-slate-900">{task.title}</p><span className="text-[10px] font-bold text-indigo-700">{task.businessUnit}</span></div><p className="mt-1 text-xs text-slate-500">{task.estimatedRevenueImpact !== undefined && task.probability !== undefined ? `Expected MYR ${(task.estimatedRevenueImpact * task.probability / 100).toLocaleString()}` : "Financial impact not estimated"}</p></div>) : <p className="rounded-lg border border-dashed p-5 text-center text-xs text-slate-500">No open Money Tasks.</p>}</div></div>
       </div>
 
       {/* 16 SUMMARY CARDS GRID */}
@@ -338,3 +390,5 @@ export function Dashboard() {
     </div>
   );
 }
+
+function ExecutiveMetric({ label, value }: { label: string; value: string }) { return <div className="rounded-xl border border-slate-200 bg-white p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{label}</p><p className="mt-1 text-lg font-extrabold text-slate-900">{value}</p></div>; }

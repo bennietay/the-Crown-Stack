@@ -1,8 +1,6 @@
 import { Request, Response, NextFunction } from "express";
-import { getApps } from "firebase-admin/app";
-import { getAuth } from "firebase-admin/auth";
-import { getFirestore } from "firebase-admin/firestore";
 import { Role } from "../types";
+import { createSupabaseRequestClient } from "./supabase";
 
 export interface RequestContext {
   uid: string;
@@ -29,15 +27,6 @@ export interface AuthenticatedRequest extends Request {
   context?: RequestContext;
 }
 
-const getDb = () => {
-  if (getApps().length > 0) {
-    return process.env.FIREBASE_DATABASE_ID
-      ? getFirestore(undefined, process.env.FIREBASE_DATABASE_ID)
-      : getFirestore();
-  }
-  return null;
-};
-
 // 1. Authenticate Request Middleware
 export const authenticateUser = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
@@ -49,82 +38,31 @@ export const authenticateUser = async (req: AuthenticatedRequest, res: Response,
 
   const token = authHeader.split("Bearer ")[1];
 
-  if (getApps().length === 0) {
-    const isDevBypassEnabled = process.env.NODE_ENV === "test" || (process.env.NODE_ENV !== "production" && process.env.APP_MODE === "demo" && process.env.ENABLE_DEV_AUTH_BYPASS === "true");
-    
-    if (!isDevBypassEnabled) {
-      console.error("[SECURITY] Firebase Admin is uninitialized and no explicit test bypass is enabled.");
-      return res.status(503).json({ error: "Auth provider unavailable", code: "AUTH_UNAVAILABLE" });
-    }
-
-    try {
-      const payload = JSON.parse(Buffer.from(token.split('.')[1] || '', 'base64').toString() || '{}');
-      const devRole: Role = (payload.role as Role) || "workspace_admin";
-      req.user = {
-        uid: payload.user_id || payload.sub || "usr-bennie",
-        email: payload.email,
-        role: devRole,
-        workspaceIds: payload.workspaceIds || ["ws-bennie"]
-      };
-
-      req.context = {
-        uid: req.user.uid,
-        email: req.user.email,
-        canonicalRole: devRole,
-        requestId,
-        customerId: payload.customerId || "cust-acme-prod"
-      };
-
-      return next();
-    } catch {
-      req.user = {
-        uid: "usr-bennie",
-        email: undefined,
-        role: "workspace_admin", // low-privilege dev role, never super_admin
-        workspaceIds: ["ws-bennie"]
-      };
-
-      req.context = {
-        uid: "usr-bennie",
-        email: undefined,
-        canonicalRole: "workspace_admin",
-        requestId,
-        customerId: "cust-acme-prod"
-      };
-
-      return next();
-    }
-  }
-
   try {
-    const decodedToken = await getAuth().verifyIdToken(token);
-    const db = getDb();
-    let globalRole: Role = (decodedToken.role as Role) || "customer";
-
-    if (db) {
-      const userDoc = await db.collection("users").doc(decodedToken.uid).get();
-      if (userDoc.exists) {
-        globalRole = (userDoc.data()?.role as Role) || globalRole;
-      }
-    }
-
+    const client = createSupabaseRequestClient(token);
+    const { data: authData, error: authError } = await client.auth.getUser(token);
+    if (authError || !authData.user) return res.status(401).json({ error: "Unauthorized: Invalid token", code: "INVALID_TOKEN" });
+    const { data: profile } = await client.from("bos_profiles").select("email,display_name").eq("id", authData.user.id).maybeSingle();
+    const { data: memberships } = await client.from("bos_workspace_members").select("workspace_id,role,status").eq("user_id", authData.user.id).eq("status", "active");
+    const membershipRoles = memberships || [];
+    const globalRole = (authData.user.app_metadata?.role as Role) || (membershipRoles[0]?.role as Role) || "customer";
     req.user = {
-      uid: decodedToken.uid,
-      email: decodedToken.email,
+      uid: authData.user.id,
+      email: profile?.email || authData.user.email,
       role: globalRole,
-      workspaceIds: (decodedToken.workspaceIds as string[]) || []
+      workspaceIds: membershipRoles.map((m: any) => m.workspace_id),
     };
 
     req.context = {
-      uid: decodedToken.uid,
-      email: decodedToken.email,
+      uid: authData.user.id,
+      email: profile?.email || authData.user.email,
       canonicalRole: globalRole,
       requestId
     };
 
     next();
   } catch (error: any) {
-    console.error("Authentication failed:", error.message);
+    console.error("Supabase authentication failed:", error instanceof Error ? error.message : error);
     return res.status(401).json({ error: "Unauthorized: Invalid token", code: "INVALID_TOKEN" });
   }
 };
@@ -155,29 +93,21 @@ export const requireWorkspace = (getWorkspaceId?: (req: Request) => string) => {
       return next();
     }
 
-    const db = getDb();
-    if (!db) {
-      if (process.env.NODE_ENV === "test" || (process.env.NODE_ENV !== "production" && process.env.APP_MODE === "demo" && process.env.ENABLE_DEV_AUTH_BYPASS === "true")) {
-        req.memberRole = req.user.role || "workspace_admin";
-        return next();
-      }
-      return res.status(503).json({ error: "Workspace authorization unavailable", code: "AUTH_UNAVAILABLE" });
-    }
-
     try {
-      const memberDocId = `${workspaceId}_${req.user.uid}`;
-      const memberDoc = await db.collection("workspaceUsers").doc(memberDocId).get();
-
-      if (!memberDoc.exists || memberDoc.data()?.status !== "active") {
+      const token = String(req.headers.authorization).slice("Bearer ".length);
+      const client = createSupabaseRequestClient(token);
+      const { data: member, error } = await client.from("bos_workspace_members").select("role,status").match({ workspace_id: workspaceId, user_id: req.user.uid }).maybeSingle();
+      if (error) throw error;
+      if (!member || member.status !== "active") {
         return res.status(403).json({
           error: `Forbidden: User is not an active member of workspace ${workspaceId}`,
           code: "NOT_WORKSPACE_MEMBER"
         });
       }
 
-      req.memberRole = memberDoc.data()?.role as Role;
+      req.memberRole = member.role as Role;
       if (req.context) {
-        req.context.membershipId = memberDocId;
+        req.context.membershipId = `${workspaceId}_${req.user.uid}`;
         req.context.canonicalRole = req.memberRole;
       }
       next();
@@ -221,25 +151,6 @@ export const requireCustomerOwnership = () => {
     // Customer role must resolve customerId from verified context
     if (req.context.customerId) {
       return next();
-    }
-
-    const db = getDb();
-    if (db) {
-      try {
-        const contactQuery = await db.collection("customerContacts")
-          .where("userId", "==", req.user.uid)
-          .limit(1)
-          .get();
-
-        if (!contactQuery.empty) {
-          const contactData = contactQuery.docs[0].data();
-          req.context.customerId = contactData.customerId;
-          req.context.customerContactId = contactQuery.docs[0].id;
-          return next();
-        }
-      } catch (err: any) {
-        console.error("Error looking up customer contact link:", err.message);
-      }
     }
 
     // Explicit automated-test fallback only.
@@ -298,13 +209,18 @@ export const logAuditEvent = async (event: {
 
   console.log(JSON.stringify({ event: "audit_log", ...auditEntry }));
 
-  const db = getDb();
-  if (db) {
-    try {
-      await db.collection("auditLogs").doc(auditEntry.id).set(auditEntry);
-    } catch (err: any) {
-      console.error("Failed to write audit log to Firestore:", err.message);
-    }
+  try {
+    const token = event.requestId && undefined;
+    await createSupabaseRequestClient(token).from("bos_records").upsert({
+      workspace_id: event.workspaceId,
+      collection_name: "audit_logs",
+      record_id: auditEntry.id,
+      data: auditEntry,
+      is_soft_deleted: false,
+      updated_at: auditEntry.timestamp,
+    }, { onConflict: "workspace_id,collection_name,record_id" });
+  } catch (err: any) {
+    console.error("Failed to write Supabase audit log:", err.message);
   }
 
   return auditEntry;

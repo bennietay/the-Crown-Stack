@@ -1,9 +1,9 @@
 import { create } from 'zustand';
-import { auth } from '../firebase';
+import { supabase, supabaseWorkspaceId } from '../supabase';
 import { SystemSettings } from '../types';
 
 export const DEFAULT_BENNIE_SETTINGS: SystemSettings = {
-  workspaceId: 'ws-bennie',
+  workspaceId: supabaseWorkspaceId,
   business: {
     name: 'Bennie Studio',
     currency: 'MYR',
@@ -42,14 +42,17 @@ export const DEFAULT_BENNIE_SETTINGS: SystemSettings = {
     requireCountry: false,
   },
   cadence: [
-    { day: 1, channel: 'email', title: 'Send Intro & Discovery Form' },
+    { day: 1, channel: 'email', title: 'Send Intro & Discovery Form', subject: 'Thanks for reaching out, {{name}}', body: 'Hi {{name}},\n\nThanks for reaching out to {{business}}. I have reviewed your enquiry and will recommend the fastest practical next step.\n\nYou can book a quick call here: {{bookingUrl}}' },
     { day: 3, channel: 'whatsapp', title: 'Follow-up on Proposal Review' },
     { day: 5, channel: 'call', title: 'Schedule Discovery Call' },
-    { day: 7, channel: 'email', title: 'Send Case Studies & Testimonials' },
+    { day: 7, channel: 'email', title: 'Send Case Studies & Testimonials', subject: 'A few ideas for {{company}}', body: 'Hi {{name}},\n\nSharing a few relevant examples and ideas for {{company}}. If you would like to move forward, reply to this email or book a time here: {{bookingUrl}}' },
   ],
   integrations: {
-    firebaseConfigured: false,
+    supabaseConfigured: true,
     whatsappConfigured: false,
+    whatsappApiConfigured: false,
+    paymentsConfigured: false,
+    emailConfigured: false,
   },
   updatedAt: new Date().toISOString(),
   updatedBy: 'usr-bennie',
@@ -85,25 +88,20 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
 
     try {
-      const user = auth.currentUser;
-      if (!user) {
-        throw new Error('Authentication is required to load workspace settings.');
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      let stored: Record<string, unknown> | null = null;
+      if (accessToken) {
+        const response = await fetch(`/api/settings/${encodeURIComponent(workspaceId)}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+        if (!response.ok) throw new Error('Settings could not be loaded. Retry before making changes.');
+        stored = await response.json();
+      } else {
+        const { data, error } = await supabase.from('bos_records').select('data').match({ workspace_id: workspaceId, collection_name: 'settings', record_id: workspaceId, is_soft_deleted: false }).maybeSingle();
+        if (error) throw error;
+        stored = data?.data || null;
       }
-      const token = await user.getIdToken();
-      
-      const res = await fetch(`/api/settings/${workspaceId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Settings could not be loaded (${res.status}).`);
-      }
-      
-      const data = await res.json();
-      set({ settings: data, loading: false, error: null, loadedWorkspaceId: workspaceId });
+      const loaded = stored ? { ...defaultForWs, ...stored, workspaceId } : defaultForWs;
+      set({ settings: loaded, loading: false, error: null, loadedWorkspaceId: workspaceId });
     } catch (err: any) {
       set({
         loading: false,
@@ -130,25 +128,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ settings: updated as SystemSettings });
 
     try {
-      const user = auth.currentUser;
-      if (!user) {
-        throw new Error("Authentication required to update settings");
-      }
-      
-      const token = await user.getIdToken();
-      const res = await fetch(`/api/settings/${workspaceId}`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(updates)
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({ error: "Failed to update settings" }));
-        throw new Error(errData.error || `Server error (${res.status})`);
-      }
+      const { error } = await supabase.from('bos_records').upsert({ workspace_id: workspaceId, collection_name: 'settings', record_id: workspaceId, data: updated, is_soft_deleted: false, updated_at: new Date().toISOString() }, { onConflict: 'workspace_id,collection_name,record_id' });
+      if (error) throw error;
       
       set({ saveStatus: 'saved', error: null });
       setTimeout(() => set({ saveStatus: 'idle' }), 3000);

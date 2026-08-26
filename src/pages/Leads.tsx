@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/src/components/ui/card";
 import { Button } from "@/src/components/ui/button";
 import { Badge } from "@/src/components/ui/badge";
 import { useDataStore } from "@/src/store/dataStore";
 import { useAuthStore } from "@/src/store/authStore";
+import { supabaseWorkspaceId } from "@/src/supabase";
 import { format, isBefore, isToday, parseISO } from "date-fns";
 import { 
   X, 
@@ -34,7 +35,7 @@ import { useSettingsStore } from "@/src/store/settingsStore";
 import { v4 as uuidv4 } from "uuid";
 
 export function Leads() {
-  const { leads, tasks, products, addLead, updateLead, deleteLead, addOpportunity, addProposal } = useDataStore();
+  const { leads, tasks, products, addLead, addTask, updateLead, deleteLead, addOpportunity, addProposal } = useDataStore();
   const workspace = useAuthStore(state => state.workspace);
   const settings = useSettingsStore(state => state.settings);
   const currency = settings.business.currency;
@@ -42,8 +43,13 @@ export function Leads() {
   
   const [search, setSearch] = useState("");
   const [filterView, setFilterView] = useState("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 25;
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
   const [activeDrawerTab, setActiveDrawerTab] = useState<"overview" | "qualification" | "closing">("overview");
+  const [proposalAction, setProposalAction] = useState<"A" | "B" | null>(null);
+  const [proposalError, setProposalError] = useState<string | null>(null);
 
   // CSV Import State
   const [isCsvImportOpen, setIsCsvImportOpen] = useState(false);
@@ -151,6 +157,34 @@ export function Leads() {
     
     return true;
   });
+  const pageCount = Math.max(1, Math.ceil(filteredLeads.length / pageSize));
+  const pageLeads = filteredLeads.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const allVisibleSelected = pageLeads.length > 0 && pageLeads.every(lead => selectedLeadIds.has(lead.id));
+
+  useEffect(() => {
+    setCurrentPage(page => Math.min(page, pageCount));
+  }, [pageCount]);
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, filterView]);
+
+  const toggleSelectAllVisible = () => {
+    setSelectedLeadIds(previous => {
+      const next = new Set(previous);
+      if (allVisibleSelected) pageLeads.forEach(lead => next.delete(lead.id));
+      else pageLeads.forEach(lead => next.add(lead.id));
+      return next;
+    });
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = Array.from(selectedLeadIds);
+    if (!ids.length) return;
+    if (!window.confirm(`Remove ${ids.length} selected lead${ids.length === 1 ? "" : "s"}? They will be soft-deleted and removed from active views.`)) return;
+    await Promise.all(ids.map(id => deleteLead(id)));
+    if (selectedLead && selectedLeadIds.has(selectedLead.id)) setSelectedLead(null);
+    setSelectedLeadIds(new Set());
+  };
 
   const getTemperatureIcon = (temp?: string) => {
     if (temp === "hot") return <Flame className="w-3.5 h-3.5 text-red-500 mr-1" />;
@@ -176,15 +210,15 @@ export function Leads() {
     window.open(`https://wa.me/${cleanPhone}?text=${msg}`, "_blank");
   };
 
-  const handleCreateSubmit = (e: React.FormEvent) => {
+  const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.contactName || !formData.email) {
       alert("Please provide at least a contact name and email address.");
       return;
     }
 
-    addLead({
-      workspaceId: workspace?.id || "ws-bennie",
+    const leadId = await addLead({
+      workspaceId: workspace?.id || supabaseWorkspaceId,
       contactName: formData.contactName,
       email: formData.email,
       phone: formData.phone,
@@ -203,6 +237,14 @@ export function Leads() {
       }
     });
 
+    const createdAt = new Date();
+    await Promise.all(settings.cadence.map(step => addTask({
+      workspaceId: workspace?.id || supabaseWorkspaceId, leadId, title: step.title, channel: step.channel, category: 'revenue',
+      dueDate: new Date(createdAt.getTime() + step.day * 86400000).toISOString(), status: 'pending', owner: settings.sales.defaultOwner || 'usr-bennie',
+      contactName: formData.contactName, companyName: formData.companyName, reason: 'Automated lead outreach cadence',
+      recommendedAction: step.channel === 'email' ? 'Send the approved email template or run the email queue.' : step.channel === 'whatsapp' ? 'Open the prefilled WhatsApp message manually.' : 'Complete this follow-up action.',
+      notes: JSON.stringify({ subject: step.subject || step.title, body: step.body || '' }),
+    })));
     setIsCreateOpen(false);
     setFormData(defaultLeadForm);
   };
@@ -323,40 +365,49 @@ export function Leads() {
 
   const handleCreateProposalFromLead = async (option: "A" | "B") => {
     if (!selectedLead || !workspace) return;
-    const product = products.find(item => item.workspaceId === workspace.id && item.type === (option === "A" ? "otc" : "mrc"));
-    if (!product) {
-      alert(`Add a ${option === "A" ? "one-time" : "monthly recurring"} product in Products & Pricing before creating this proposal.`);
-      return;
+    setProposalAction(option);
+    setProposalError(null);
+    try {
+      const product = products.find(item => item.workspaceId === workspace.id && item.type === (option === "A" ? "otc" : "mrc"));
+      if (!product) {
+        throw new Error(`Add a ${option === "A" ? "one-time" : "monthly recurring"} product in Products & Pricing before creating this proposal.`);
+      }
+      const otcVal = option === "A" ? (selectedLead.closingOffer?.optionA?.otc || selectedLead.estimatedOtc || product.price) : 0;
+      const mrcVal = option === "B" ? (selectedLead.closingOffer?.optionB?.mrc || selectedLead.estimatedMrc || product.price) : 0;
+
+      const opportunityId = await addOpportunity({
+        workspaceId: workspace.id,
+        leadId: selectedLead.id,
+        name: selectedLead.companyName || selectedLead.contactName,
+        stage: "Solution proposed",
+        estimatedValue: option === "A" ? otcVal : mrcVal * 12,
+        currency,
+        probability: 50,
+        source: selectedLead.source || "lead",
+      });
+
+      await addProposal({
+        workspaceId: workspace.id,
+        opportunityId,
+        items: [{ productId: product.id, quantity: 1, type: product.type, price: option === "A" ? otcVal : mrcVal }],
+        status: "draft",
+        totalOTC: option === "A" ? otcVal : 0,
+        totalMRC: option === "B" ? mrcVal : 0,
+        taxRate: settings.sales.taxRate,
+        currency,
+        token: uuidv4(),
+        expiresAt: new Date(Date.now() + Math.max(1, settings.sales.proposalValidityDays || 14) * 86400000).toISOString(),
+      });
+
+      await updateLead(selectedLead.id, { status: "proposal" });
+      alert(`Draft ${option === "A" ? "one-off" : "monthly care"} proposal created. Review it in Proposals before sharing.`);
+      window.location.assign("/proposals");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The proposal could not be created.";
+      setProposalError(message);
+    } finally {
+      setProposalAction(null);
     }
-    const otcVal = option === "A" ? (selectedLead.closingOffer?.optionA?.otc || selectedLead.estimatedOtc || product.price) : 0;
-    const mrcVal = option === "B" ? (selectedLead.closingOffer?.optionB?.mrc || selectedLead.estimatedMrc || product.price) : 0;
-
-    const opportunityId = await addOpportunity({
-      workspaceId: workspace.id,
-      leadId: selectedLead.id,
-      name: selectedLead.companyName || selectedLead.contactName,
-      stage: "Solution proposed",
-      estimatedValue: option === "A" ? otcVal : mrcVal * 12,
-      currency,
-      probability: 50,
-      source: selectedLead.source || "lead",
-    });
-
-    await addProposal({
-      workspaceId: workspace.id,
-      opportunityId,
-      items: [{ productId: product.id, quantity: 1, type: product.type, price: option === "A" ? otcVal : mrcVal }],
-      status: "draft",
-      totalOTC: option === "A" ? otcVal : 0,
-      totalMRC: option === "B" ? mrcVal : 0,
-      taxRate: settings.sales.taxRate,
-      currency,
-      token: uuidv4(),
-      expiresAt: new Date(Date.now() + Math.max(1, settings.sales.proposalValidityDays || 14) * 86400000).toISOString(),
-    });
-
-    await updateLead(selectedLead.id, { status: "proposal" });
-    alert(`Draft ${option === "A" ? "one-off" : "monthly care"} proposal created. Review it before sharing.`);
   };
 
   return (
@@ -404,6 +455,14 @@ export function Leads() {
                 <Button variant={filterView === "overdue" ? "default" : "outline"} size="sm" onClick={() => setFilterView("overdue")}>Overdue</Button>
                 <Button variant={filterView === "high_budget" ? "default" : "outline"} size="sm" onClick={() => setFilterView("high_budget")}>High Budget</Button>
               </div>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={toggleSelectAllVisible} disabled={!pageLeads.length}>
+                  {allVisibleSelected ? "Clear selection" : "Select all visible"}
+                </Button>
+                {selectedLeadIds.size > 0 && <Button variant="outline" size="sm" className="text-rose-600 border-rose-200 hover:bg-rose-50" onClick={handleBulkDelete}>
+                  <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Delete selected ({selectedLeadIds.size})
+                </Button>}
+              </div>
               <input 
                 placeholder="Search contact, company, email..."
                 className="h-8 w-64 rounded-md border border-slate-200 px-3 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
@@ -417,7 +476,10 @@ export function Leads() {
             <table className="w-full text-sm text-left">
               <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm text-[10px] uppercase font-bold text-slate-400">
                 <tr>
+                  <th className="px-6 py-3 w-10"><input type="checkbox" aria-label="Select all leads on this page" checked={allVisibleSelected} onChange={toggleSelectAllVisible} disabled={!pageLeads.length} /></th>
                   <th className="px-6 py-3">Contact</th>
+                  <th className="px-6 py-3">Country</th>
+                  <th className="px-6 py-3">Source</th>
                   <th className="px-6 py-3">Qualification Score</th>
                   <th className="px-6 py-3">SLA Status</th>
                   <th className="px-6 py-3">Potential Value</th>
@@ -426,7 +488,7 @@ export function Leads() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredLeads.map((lead) => {
+                {pageLeads.map((lead) => {
                   const sla = getSlaStatus(lead);
                   const lTasks = workspaceTasks.filter(t => t.leadId === lead.id && t.status === "pending");
                   const nextTask = lTasks.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0];
@@ -436,10 +498,13 @@ export function Leads() {
                       setSelectedLead(lead);
                       setQualAnswers(lead.qualificationAnswers || {});
                     }}>
+                      <td className="px-6 py-3" onClick={e => e.stopPropagation()}><input type="checkbox" aria-label={`Select ${lead.contactName}`} checked={selectedLeadIds.has(lead.id)} onChange={() => setSelectedLeadIds(previous => { const next = new Set(previous); if (next.has(lead.id)) next.delete(lead.id); else next.add(lead.id); return next; })} /></td>
                       <td className="px-6 py-3">
                         <div className="font-semibold text-slate-900">{lead.contactName}</div>
                         <div className="text-xs text-slate-500">{lead.companyName || lead.email}</div>
                       </td>
+                      <td className="px-6 py-3 text-xs text-slate-600">{lead.country || lead.details?.city || "—"}</td>
+                      <td className="px-6 py-3 text-xs text-slate-600">{lead.source || "—"}</td>
                       <td className="px-6 py-3">
                         <div className="flex items-center mb-1">
                           {getTemperatureIcon(lead.temperature)}
@@ -491,6 +556,14 @@ export function Leads() {
                 })}
               </tbody>
             </table>
+            <div className="flex items-center justify-between border-t border-slate-100 px-6 py-3 text-xs text-slate-500">
+              <span>{filteredLeads.length ? `${(currentPage - 1) * pageSize + 1}–${Math.min(currentPage * pageSize, filteredLeads.length)} of ${filteredLeads.length}` : "0 leads"}</span>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" disabled={currentPage <= 1} onClick={() => setCurrentPage(page => Math.max(1, page - 1))}>Previous</Button>
+                <span>Page {currentPage} of {pageCount}</span>
+                <Button variant="outline" size="sm" disabled={currentPage >= pageCount} onClick={() => setCurrentPage(page => Math.min(pageCount, page + 1))}>Next</Button>
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -1024,8 +1097,8 @@ export function Leads() {
                       <Badge className="bg-blue-100 text-blue-800 border-blue-200">Option A: Custom Build</Badge>
                       <p className="text-xl font-extrabold text-slate-900">{selectedLead.closingOffer?.optionA?.otc || selectedLead.estimatedOtc ? money.format(selectedLead.closingOffer?.optionA?.otc || selectedLead.estimatedOtc || 0) : "Price from catalogue"} <span className="text-xs font-normal text-slate-500">one-time</span></p>
                       <p className="text-xs text-slate-600">Uses the first one-time product in Products & Pricing unless a lead-specific offer is recorded.</p>
-                      <Button className="w-full bg-slate-900 hover:bg-slate-800 text-white text-xs" onClick={() => handleCreateProposalFromLead("A")}>
-                        Create Option A Draft
+                      <Button className="w-full bg-slate-900 hover:bg-slate-800 text-white text-xs" disabled={proposalAction !== null} onClick={() => void handleCreateProposalFromLead("A")}>
+                        {proposalAction === "A" ? "Creating draft…" : "Create Option A Draft"}
                       </Button>
                     </div>
 
@@ -1034,11 +1107,16 @@ export function Leads() {
                       <Badge className="bg-indigo-100 text-indigo-800 border-indigo-200">Option B: Monthly Care</Badge>
                       <p className="text-xl font-extrabold text-indigo-900">{selectedLead.closingOffer?.optionB?.mrc || selectedLead.estimatedMrc ? money.format(selectedLead.closingOffer?.optionB?.mrc || selectedLead.estimatedMrc || 0) : "Price from catalogue"} <span className="text-xs font-normal text-slate-500">/month</span></p>
                       <p className="text-xs text-slate-600">Uses the first recurring product in Products & Pricing unless a lead-specific offer is recorded.</p>
-                      <Button className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs" onClick={() => handleCreateProposalFromLead("B")}>
-                        Create Option B Draft
+                      <Button className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs" disabled={proposalAction !== null} onClick={() => void handleCreateProposalFromLead("B")}>
+                        {proposalAction === "B" ? "Creating draft…" : "Create Option B Draft"}
                       </Button>
                     </div>
                   </div>
+                  {proposalError && (
+                    <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                      {proposalError}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -116,6 +116,234 @@ export interface FollowUpTask {
   createdAt: string;
 }
 
+/** Shared records for the Diamond Path (Amway) module.  These intentionally
+ * keep the source CRM's vocabulary while remaining workspace-scoped records
+ * in the Revenue OS store, so the module can evolve without a second auth or
+ * database stack. */
+export type DiamondProspectStatus = "Lead" | "Contacted" | "Shown Plan" | "Follow Up" | "Joined ABO" | "Joined PC" | "Closed" | "Not Interested" | "Archived";
+export type DiamondProspectType = "Business Builder / ABO" | "Product Customer / PC" | "Professional / Career" | "Student / Young Adult" | "Family / Warm Network" | "Other";
+export interface DiamondProspect {
+  id: string;
+  workspaceId: string;
+  name: string;
+  phone?: string;
+  email?: string;
+  location?: string;
+  status: DiamondProspectStatus;
+  prospectType: DiamondProspectType;
+  interest?: string;
+  source?: string;
+  preferredContactMethod?: string;
+  notes?: string;
+  tags?: string[];
+  lastContactDate?: string;
+  nextFollowUpDate?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DiamondCustomer {
+  id: string;
+  workspaceId: string;
+  name: string;
+  phone?: string;
+  email?: string;
+  preferredContactMethod?: string;
+  products?: string[];
+  lastPurchaseDate?: string;
+  nextReorderDate?: string;
+  lastPurchaseAmount?: number;
+  notes?: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DiamondFollowUp {
+  id: string;
+  workspaceId: string;
+  prospectId?: string;
+  customerId?: string;
+  contactName: string;
+  channel: "WhatsApp" | "Phone Call" | "Email" | "Meeting" | "Follow Up";
+  stage: "Prospecting" | "Presentation" | "Customer Care & Reorder";
+  dueDate: string;
+  completed: boolean;
+  completedAt?: string;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface DiamondProduct {
+  id: string; workspaceId: string; sku: string; name: string; brand?: string; category: string;
+  memberPrice: number; retailPrice: number; pv: number; bv?: number; status: "Active" | "Inactive" | "Archived";
+  defaultReorderCycleDays?: number; officialUrl?: string; createdAt?: string; updatedAt?: string;
+}
+
+export interface DiamondPurchase {
+  id: string; workspaceId: string; customerId: string; customerName?: string; productId: string; productName: string;
+  quantity: number; purchaseDate: string; unitPrice: number; totalPrice: number; pv: number; bv?: number;
+  reorderCycleDays?: number; expectedReorderDate?: string; status: "Completed" | "Pending Delivery" | "Active" | "Reordered" | "Cancelled";
+  notes?: string; createdAt?: string;
+}
+
+export interface DiamondScript {
+  id: string; workspaceId: string; title: string; category: "Approach" | "Follow Up" | "Objection Handling" | "Closing" | "Product Sharing" | "Reorder Reminder";
+  content: string; status: "Approved" | "Needs Review" | "Personal Draft"; tags?: string[]; createdAt?: string;
+}
+
+export type BusinessUnit = "WAAS" | "AMWAY" | "AFFILIATE" | "ETSY";
+export interface RevenueEvent {
+  id: string;
+  workspaceId: string;
+  businessUnit: BusinessUnit;
+  sourceType: "sale" | "subscription" | "commission" | "payout" | "refund";
+  externalId?: string;
+  customerName?: string;
+  currency: string;
+  grossRevenue: number;
+  costs: number;
+  fees: number;
+  status: "expected" | "booked" | "collected" | "refunded" | "cancelled";
+  occurredAt: string;
+  collectedAt?: string;
+  exchangeRateToMyr?: number;
+  exchangeRateDate?: string;
+  exchangeRateSource?: string;
+  metadata?: Record<string, unknown>;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface RevenueGoal {
+  id: string;
+  workspaceId: string;
+  name: string;
+  targetAmount: number;
+  currency: string;
+  startDate: string;
+  endDate: string;
+  status: "active" | "paused" | "completed";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MoneyTask {
+  id: string;
+  workspaceId: string;
+  businessUnit: BusinessUnit;
+  title: string;
+  reason: string;
+  priority: "critical" | "high" | "medium" | "low";
+  estimatedRevenueImpact?: number;
+  probability?: number;
+  urgency?: string;
+  dueDate?: string;
+  relatedEntityType?: string;
+  relatedEntityId?: string;
+  status: "open" | "in_progress" | "completed" | "dismissed";
+  recommendedAction: string;
+  source: "user" | "system" | "integration" | "ai";
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NotificationRecord {
+  id: string;
+  workspaceId: string;
+  category: "critical" | "warning" | "opportunity" | "information";
+  source: BusinessUnit | "SYSTEM";
+  title: string;
+  message: string;
+  status: "unread" | "read" | "resolved" | "snoozed";
+  snoozedUntil?: string;
+  relatedEntityType?: string;
+  relatedEntityId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AutomationDefinition {
+  id: string;
+  workspaceId: string;
+  name: string;
+  businessUnit: BusinessUnit | "SYSTEM";
+  trigger: string;
+  conditions: string;
+  action: string;
+  approvalMode: "auto" | "approval_required" | "notify";
+  enabled: boolean;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  lastResult?: string;
+  errorStatus?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ActivityRecord {
+  id: string;
+  workspaceId: string;
+  actor: "USER" | "AI" | "SYSTEM" | "INTEGRATION";
+  businessUnit: BusinessUnit | "SYSTEM";
+  action: string;
+  entityType: string;
+  entityId?: string;
+  result: "success" | "failure" | "pending";
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface AffiliateRecord {
+  id: string;
+  workspaceId: string;
+  kind: "program" | "link" | "commission" | "lead_magnet";
+  name: string;
+  status: "draft" | "active" | "paused";
+  value?: number;
+  url?: string;
+  createdAt: string;
+}
+
+export interface EtsyRecord {
+  id: string;
+  workspaceId: string;
+  kind: "listing" | "order";
+  name: string;
+  status: "draft" | "active" | "pending" | "fulfilled" | "cancelled";
+  revenue?: number;
+  costs?: number;
+  externalId?: string;
+  createdAt: string;
+}
+
+export type EtsyProductStatus = "IDEA" | "RESEARCH" | "DESIGN" | "SEO" | "CREATIVE" | "REVIEW" | "APPROVED" | "DRAFT" | "PUBLISHED" | "OPTIMIZING" | "PAUSED" | "ARCHIVED";
+export interface EtsyProduct {
+  id: string; workspaceId: string; internalName: string; etsyListingId?: string; printifyProductId?: string;
+  status: EtsyProductStatus; productType: string; niche: string; audience: string; occasion?: string; designConcept: string;
+  personalization?: string; currency: string; price: number; productionCost?: number; etsyFees?: number; discount?: number;
+  shippingSubsidy?: number; adCost?: number; refundAllocation?: number; seoScore?: number; opportunityScore?: number;
+  seo?: { title?: string; tags?: string[]; description?: string; altText?: string; keywords?: string[]; faq?: string[]; shopSection?: string; pinterestKeywords?: string[] };
+  approvedAt?: string; publishedAt?: string; createdAt: string; updatedAt: string;
+}
+
+export interface PrintifyRecord {
+  id: string;
+  workspaceId: string;
+  kind: "product" | "order";
+  name: string;
+  status: string;
+  externalId: string;
+  shopId: string;
+  productionCost?: number;
+  shippingCost?: number;
+  trackingUrl?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface Opportunity {
   id: string;
   workspaceId: string;
@@ -280,10 +508,17 @@ export interface SystemSettings {
     requirePhone?: boolean;
     requireCountry?: boolean;
   };
-  cadence: Array<{ day: number; channel: "email" | "whatsapp" | "call" | "manual"; title: string }>;
+  cadence: Array<{ day: number; channel: "email" | "whatsapp" | "call" | "manual"; title: string; subject?: string; body?: string }>;
   integrations?: {
-    firebaseConfigured: boolean;
+    supabaseConfigured: boolean;
     whatsappConfigured: boolean;
+    whatsappApiConfigured?: boolean;
+    paymentsConfigured?: boolean;
+    emailConfigured?: boolean;
+    affiliateApiConfigured?: boolean;
+    etsyConfigured?: boolean;
+    printifyConfigured?: boolean;
+    aiConfigured?: boolean;
     lastVerified?: string;
   };
   updatedAt: string;

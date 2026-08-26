@@ -2,8 +2,7 @@ import { useState, useEffect } from "react";
 import { useAuthStore } from "@/src/store/authStore";
 import { Button } from "@/src/components/ui/button";
 import { Mail, Lock, AlertCircle, CheckCircle2, ArrowRight, ExternalLink } from "lucide-react";
-import { sendPasswordResetEmail } from "firebase/auth";
-import { auth } from "@/src/firebase";
+import { supabase } from "@/src/supabase";
 
 export function Login() {
   const googleAuthEnabled = import.meta.env.VITE_GOOGLE_AUTH_ENABLED === "true";
@@ -26,18 +25,33 @@ export function Login() {
     }
   }, []);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submitCredentials = async () => {
+    // Chrome autofill can update the input DOM without firing React's
+    // onChange event. Read the live values so autofilled credentials are not
+    // accidentally submitted as empty strings.
+    const emailInput = document.getElementById("login-email") as HTMLInputElement | null;
+    const passwordInput = document.getElementById("login-password") as HTMLInputElement | null;
+    const emailValue = emailInput?.value?.trim() || email.trim();
+    const passwordValue = passwordInput?.value || password;
+    if (!emailValue || !passwordValue) {
+      setError("Please enter your email address and password.");
+      return;
+    }
     setLoading(true);
     setError(null);
     setMessage(null);
     try {
-      await loginUser(email, password);
+      await loginUser(emailValue, passwordValue);
     } catch (err: any) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await submitCredentials();
   };
 
   const handleGoogleSignIn = async () => {
@@ -55,7 +69,7 @@ export function Login() {
       if (err.code === "auth/popup-closed-by-user") {
         friendlyError = "Sign-in popup was closed before completing.";
       } else if (err.code === "auth/unauthorized-domain") {
-        friendlyError = "This domain is not authorized for Google Sign-In in Firebase. Please add it to your Firebase Auth settings.";
+        friendlyError = "This domain is not authorized for Google Sign-In in Supabase. Add it to the Supabase Auth redirect configuration.";
       } else if (err.code === "auth/popup-blocked") {
          friendlyError = "Sign-in popup was blocked by your browser. Please allow popups or open the app in a new tab.";
       }
@@ -71,11 +85,11 @@ export function Login() {
       return;
     }
     try {
-      if (auth) {
-        await sendPasswordResetEmail(auth, email);
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+      if (!resetError) {
         setMessage("Password reset email sent. Please check your inbox.");
         setError(null);
-      }
+      } else throw resetError;
     } catch (err: any) {
       setError(err.message);
     }
@@ -205,7 +219,8 @@ export function Login() {
             </div>
 
             <Button
-              type="submit"
+              type="button"
+              onClick={() => void submitCredentials()}
               disabled={loading}
               className="w-full mt-2 bg-slate-900 hover:bg-slate-800 text-white font-medium h-12 rounded-xl shadow-sm transition-all"
             >

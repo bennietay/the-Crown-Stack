@@ -12,6 +12,7 @@ export function ProposalView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [paymentBusy, setPaymentBusy] = useState(false);
   const [acceptedRecord, setAcceptedRecord] = useState<any>(null);
   const [form, setForm] = useState({ customerName: "", customerEmail: "", customerTitle: "", company: "" });
   const [checks, setChecks] = useState({ reviewedScope: false, acceptCommercialTerms: false, hasAuthority: false, agreeTermsAndPolicies: false });
@@ -61,6 +62,15 @@ export function ProposalView() {
     }
   }
 
+  async function handleCheckout() {
+    setPaymentBusy(true); setError("");
+    try {
+      const response = await fetch(`/api/proposals/public/${encodeURIComponent(token || "")}/checkout`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const data = await response.json(); if (!response.ok || !data.checkoutUrl) throw new Error(data.error || "Checkout could not be created.");
+      window.location.assign(data.checkoutUrl);
+    } catch (checkoutError: any) { setError(checkoutError.message || "Checkout could not be created."); setPaymentBusy(false); }
+  }
+
   if (loading) return <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 text-sm text-slate-600">Loading proposal…</div>;
 
   if (!proposal) {
@@ -71,15 +81,18 @@ export function ProposalView() {
     );
   }
 
-  if (acceptedRecord || proposal.status.toLowerCase() === "accepted") {
+  if (acceptedRecord || ["accepted", "payment pending", "paid"].includes(proposal.status.toLowerCase())) {
+    const paid = proposal.status.toLowerCase() === "paid" || new URLSearchParams(window.location.search).get("payment") === "success";
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <Card className="w-full max-w-xl text-center shadow-xl">
           <CardContent className="p-8 space-y-4">
             <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-600" />
-            <h1 className="text-2xl font-bold text-slate-900">Proposal accepted</h1>
-            <p className="text-sm text-slate-600">Thank you. Your acceptance is recorded. Bennie will contact you with payment and kickoff instructions.</p>
+            <h1 className="text-2xl font-bold text-slate-900">{paid ? "Payment received" : "Proposal accepted"}</h1>
+            <p className="text-sm text-slate-600">{paid ? "Thank you. Stripe is confirming the payment and Bennie will follow up with the kickoff details." : "Your acceptance is recorded. Continue to secure Stripe Checkout to pay the one-off amount and start any monthly care plan shown in the proposal."}</p>
             {acceptedRecord?.id && <p className="text-xs text-slate-500">Acceptance reference: {acceptedRecord.id}</p>}
+            {!paid && <button onClick={() => void handleCheckout()} disabled={paymentBusy} className="w-full rounded-xl bg-indigo-600 px-5 py-4 font-bold text-white hover:bg-indigo-700 disabled:opacity-60">{paymentBusy ? "Opening secure checkout…" : "Continue to secure payment"}</button>}
+            {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
           </CardContent>
         </Card>
       </div>
@@ -128,7 +141,7 @@ export function ProposalView() {
         <Card className="border-2 border-indigo-600 shadow-xl">
           <CardHeader className="bg-indigo-600 text-white">
             <CardTitle className="flex items-center gap-2"><Lock className="h-5 w-5" />Accept this proposal</CardTitle>
-            <CardDescription className="text-indigo-100">Acceptance records your signatory details and decision. Payment instructions follow separately.</CardDescription>
+            <CardDescription className="text-indigo-100">Acceptance records your signatory details and decision. Secure Stripe Checkout follows after acceptance.</CardDescription>
           </CardHeader>
           <CardContent className="pt-6">
             <form onSubmit={handleAccept} className="space-y-6">

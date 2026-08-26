@@ -1,14 +1,6 @@
 import { create } from 'zustand';
 import { User, Workspace, Role } from '../types';
-import { auth, db } from '../firebase';
-import { 
-  onAuthStateChanged, 
-  signOut, 
-  signInWithEmailAndPassword, 
-  GoogleAuthProvider,
-  signInWithPopup 
-} from 'firebase/auth';
-import { doc, getDoc, collection, getDocs } from 'firebase/firestore';
+import { supabase, supabaseWorkspaceId } from '../supabase';
 
 interface AuthState {
   user: User | null;
@@ -26,101 +18,59 @@ interface AuthState {
 }
 
 const normalizeRole = (rawRole?: string): Role => {
-  if (!rawRole) return "customer";
-  const lower = rawRole.toLowerCase().trim();
-  if (lower === "super_admin" || lower === "super admin") return "super_admin";
-  if (lower === "workspace_admin" || lower === "workspace admin" || lower === "admin") return "workspace_admin";
-  if (lower === "sales" || lower === "sales user") return "sales";
-  if (lower === "operations" || lower === "operations user" || lower === "ops") return "operations";
-  if (lower === "support" || lower === "support user") return "support";
-  if (lower === "customer" || lower === "client") return "customer";
-  return "customer";
+  const role = String(rawRole || 'customer').toLowerCase().trim().replaceAll(' ', '_');
+  return ['super_admin', 'workspace_admin', 'sales', 'operations', 'support', 'customer'].includes(role) ? role as Role : 'customer';
+};
+
+const resolveUserRecord = async (authUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> }) => {
+  const [{ data: profile }, { data: memberships, error: membershipError }] = await Promise.all([
+    supabase.from('bos_profiles').select('*').eq('id', authUser.id).maybeSingle(),
+    supabase.from('bos_workspace_members').select('workspace_id,role,status').eq('user_id', authUser.id).eq('status', 'active'),
+  ]);
+  if (membershipError) throw membershipError;
+  const activeMemberships = memberships || [];
+  const workspaceIds = activeMemberships.length ? activeMemberships.map(m => m.workspace_id) : [supabaseWorkspaceId];
+  const { data: workspaces, error: workspaceError } = await supabase.from('bos_workspaces').select('*').in('id', workspaceIds);
+  if (!activeMemberships.length) throw new Error('This account has no active workspace membership.');
+
+  // A valid membership is the source of authorization. If the workspace row
+  // is briefly unavailable while the session/RLS policy settles, retain the
+  // assigned workspace context instead of bouncing the user back to login.
+  const visibleWorkspaces = workspaceError ? [] : (workspaces || []);
+  const resolvedWorkspaces = activeMemberships.map((membership) => {
+    const visible = visibleWorkspaces.find((workspace) => workspace.id === membership.workspace_id);
+    return visible || {
+      id: membership.workspace_id,
+      name: membership.workspace_id === supabaseWorkspaceId ? 'Bennie Studio' : membership.workspace_id,
+      type: 'agency',
+      created_at: new Date().toISOString(),
+    };
+  });
+
+  const workspaceRoles: Record<string, Role> = {};
+  activeMemberships.forEach(m => { workspaceRoles[m.workspace_id] = normalizeRole(m.role); });
+  if (!workspaceRoles[supabaseWorkspaceId]) workspaceRoles[supabaseWorkspaceId] = 'workspace_admin';
+  const rawRole = profile?.role || workspaceRoles[resolvedWorkspaces[0].id] || 'workspace_admin';
+  const userObj: User = {
+    id: authUser.id,
+    uid: authUser.id,
+    email: profile?.email || authUser.email || '',
+    name: profile?.display_name || String(authUser.user_metadata?.name || authUser.email?.split('@')[0] || 'User'),
+    role: normalizeRole(rawRole),
+    workspaceIds: resolvedWorkspaces.map(w => w.id),
+    activeWorkspaceId: resolvedWorkspaces[0].id,
+    createdAt: profile?.created_at,
+    updatedAt: profile?.updated_at,
+  };
+  return {
+    userObj,
+    workspaces: resolvedWorkspaces.map(w => ({ id: w.id, name: w.name, type: 'agency', createdAt: w.created_at } as Workspace)),
+    workspaceRoles,
+  };
 };
 
 let authUnsubscribe: (() => void) | null = null;
-
-const bootstrapFirstAdministrator = async (firebaseUser: any) => {
-  const token = await firebaseUser.getIdToken();
-  const response = await fetch('/api/bootstrap', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-  });
-
-  if (response.ok || response.status === 409) return;
-  const body = await response.json().catch(() => ({}));
-  throw new Error(body.error || 'This account has not been provisioned for Bennie Business OS.');
-};
-
-const resolveUserRecord = async (firebaseUser: any): Promise<{ userObj: User, workspaces: Workspace[], workspaceRoles: Record<string, Role> }> => {
-  if (!db) throw new Error("Firestore not initialized");
-
-  const userRef = doc(db, 'users', firebaseUser.uid);
-  const userSnap = await getDoc(userRef);
-
-  if (!userSnap.exists()) {
-    await bootstrapFirstAdministrator(firebaseUser);
-  }
-
-  const provisionedUserSnap = userSnap.exists() ? userSnap : await getDoc(userRef);
-  if (!provisionedUserSnap.exists()) throw new Error("This account has not been provisioned for Bennie Business OS.");
-
-  const raw = provisionedUserSnap.data();
-  const userObj = {
-    ...raw,
-    id: firebaseUser.uid,
-    email: raw.email || firebaseUser.email || '',
-    name: raw.name || firebaseUser.displayName || 'User',
-    role: normalizeRole(raw.role),
-    createdAt: raw.createdAt || new Date().toISOString(),
-    updatedAt: raw.updatedAt || new Date().toISOString(),
-  } as User;
-
-  const workspaceRoles: Record<string, Role> = {};
-  const workspaceIds: string[] = [];
-  const assignedWorkspaceIds = Array.isArray(userObj.workspaceIds)
-    ? [...new Set(userObj.workspaceIds.filter(Boolean))]
-    : [];
-
-  const membershipSnapshots = await Promise.all(
-    assignedWorkspaceIds.map(workspaceId =>
-      getDoc(doc(db, 'workspaceUsers', `${workspaceId}_${firebaseUser.uid}`))
-    )
-  );
-
-  membershipSnapshots.forEach(membershipSnapshot => {
-    if (!membershipSnapshot.exists()) return;
-    const data = membershipSnapshot.data();
-    if (data.status === 'active' || !data.status) {
-      const canonicalRole = normalizeRole(data.role);
-      workspaceRoles[data.workspaceId] = canonicalRole;
-      workspaceIds.push(data.workspaceId);
-    }
-  });
-
-  let workspaces: Workspace[] = [];
-  if (userObj.role === 'super_admin') {
-    const allWs = await getDocs(collection(db, 'workspaces'));
-    allWs.forEach(workspaceDoc => {
-       workspaces.push({ ...workspaceDoc.data(), id: workspaceDoc.id } as Workspace);
-       if (!workspaceRoles[workspaceDoc.id]) workspaceRoles[workspaceDoc.id] = 'super_admin';
-    });
-  } else if (workspaceIds.length > 0) {
-    const workspaceSnapshots = await Promise.all(
-      workspaceIds.map(workspaceId => getDoc(doc(db, 'workspaces', workspaceId)))
-    );
-    workspaceSnapshots.forEach(workspaceSnapshot => {
-      if (workspaceSnapshot.exists()) {
-        workspaces.push({ ...workspaceSnapshot.data(), id: workspaceSnapshot.id } as Workspace);
-      }
-    });
-  }
-
-  if (workspaces.length === 0) {
-    throw new Error("This account has no active workspace membership.");
-  }
-
-  return { userObj, workspaces, workspaceRoles };
-};
+let activeHydrationUserId: string | null = null;
 
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
@@ -129,119 +79,90 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   workspaceRoles: {},
   loading: true,
   error: null,
-
   clearError: () => set({ error: null }),
 
   initAuth: () => {
-    try {
-      if (auth) {
-        authUnsubscribe?.();
-        authUnsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-          if (firebaseUser) {
-            try {
-              const { userObj, workspaces, workspaceRoles } = await resolveUserRecord(firebaseUser);
-              
-              set({
-                user: userObj,
-                workspaces,
-                workspaceRoles,
-                workspace: workspaces[0] || null,
-                loading: false,
-                error: null
-              });
-            } catch (err) {
-              console.error("Error setting firebase user", err);
-              await signOut(auth).catch(() => undefined);
-              set({ user: null, workspace: null, workspaces: [], workspaceRoles: {}, loading: false, error: err instanceof Error ? err.message : "Account access denied" });
-            }
-          } else {
-            set({ user: null, workspace: null, workspaces: [], workspaceRoles: {}, loading: false, error: null });
-          }
-        });
-        return () => {
-          authUnsubscribe?.();
-          authUnsubscribe = null;
-        };
-      } else {
-        set({ loading: false });
+    authUnsubscribe?.();
+    let settled = false;
+    let hydrateVersion = 0;
+    const timeout = window.setTimeout(() => {
+      if (!settled) set({ loading: false, error: null });
+    }, 8000);
+    const hydrate = async (sessionUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> } | null, source: 'initial' | 'event') => {
+      const version = ++hydrateVersion;
+      settled = true;
+      window.clearTimeout(timeout);
+      if (!sessionUser) {
+        // The initial getSession call can resolve with a stale null snapshot
+        // after a sign-in has already completed. Never let that snapshot
+        // erase a user established by the sign-in event.
+        if (source === 'initial' && get().user) return;
+        if (version !== hydrateVersion) return;
+        set({ user: null, workspace: null, workspaces: [], workspaceRoles: {}, loading: false, error: null });
+        return;
       }
-    } catch (err) {
-      set({ loading: false });
-    }
-    return () => undefined;
+      try {
+        const resolved = await resolveUserRecord(sessionUser);
+        if (version !== hydrateVersion) return;
+        const preferredWorkspaceId = window.localStorage.getItem('bennie.activeWorkspaceId');
+        const activeWorkspace = resolved.workspaces.find(item => item.id === preferredWorkspaceId) || resolved.workspaces[0] || null;
+        set({ user: { ...resolved.userObj, activeWorkspaceId: activeWorkspace?.id }, workspaces: resolved.workspaces, workspaceRoles: resolved.workspaceRoles, workspace: activeWorkspace, loading: false, error: null });
+      } catch (error) {
+        console.error('[auth] workspace hydration failed', error instanceof Error ? error.message : error);
+        if (version !== hydrateVersion) return;
+        // Keep the Supabase session intact on hydration failures. A transient
+        // RLS/network error should be retryable instead of forcing a logout.
+        set({ user: null, workspace: null, workspaces: [], workspaceRoles: {}, loading: false, error: error instanceof Error ? error.message : 'Account access denied' });
+      }
+    };
+    const scheduleHydrate = (sessionUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> } | null, source: 'initial' | 'event') => {
+      if (sessionUser && activeHydrationUserId === sessionUser.id) return;
+      activeHydrationUserId = sessionUser?.id || null;
+      void hydrate(sessionUser, source).finally(() => {
+        if (!sessionUser || activeHydrationUserId === sessionUser.id) activeHydrationUserId = null;
+      });
+    };
+    supabase.auth.getSession().then(({ data }) => scheduleHydrate(data.session?.user || null, 'initial'));
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      scheduleHydrate(session?.user || null, 'event');
+    });
+    authUnsubscribe = () => data.subscription.unsubscribe();
+    return () => { window.clearTimeout(timeout); authUnsubscribe?.(); authUnsubscribe = null; };
   },
 
-  loginUser: async (email: string, pass: string) => {
+  loginUser: async (email, pass) => {
     set({ loading: true, error: null });
-    const cleanEmail = email.toLowerCase().trim();
-
+    const { data, error } = await supabase.auth.signInWithPassword({ email: email.toLowerCase().trim(), password: pass });
+    if (error || !data.user) {
+      const message = error?.message?.toLowerCase().includes('invalid') ? 'Invalid email or password.' : (error?.message || 'Authentication failed.');
+      set({ loading: false, error: message });
+      throw new Error(message);
+    }
     try {
-      if (!auth) throw new Error("Firebase Auth is not configured");
-      const cred = await signInWithEmailAndPassword(auth, cleanEmail, pass);
-      const { userObj, workspaces, workspaceRoles } = await resolveUserRecord(cred.user);
-      
-      set({
-        user: userObj,
-        workspaces,
-        workspaceRoles,
-        workspace: workspaces[0] || null,
-        loading: false,
-        error: null
-      });
-    } catch (err: any) {
-      if (auth.currentUser) await signOut(auth).catch(() => undefined);
-      let friendlyError = "Authentication failed. Please check your email and password.";
-      if (err.code === "auth/invalid-credential" || err.code === "auth/user-not-found" || err.code === "auth/wrong-password") {
-        friendlyError = "Invalid email or password.";
-      } else if (err.code === "auth/invalid-email") {
-        friendlyError = "Please enter a valid email address.";
-      } else if (err.code === "auth/too-many-requests") {
-        friendlyError = "Too many failed attempts. Please try again in a few minutes.";
-      } else if (err.message) {
-        friendlyError = err.message;
-      }
-      set({ loading: false, error: friendlyError });
-      throw new Error(friendlyError);
+      const resolved = await resolveUserRecord(data.user);
+      const preferredWorkspaceId = window.localStorage.getItem('bennie.activeWorkspaceId');
+      const activeWorkspace = resolved.workspaces.find(item => item.id === preferredWorkspaceId) || resolved.workspaces[0] || null;
+      set({ user: { ...resolved.userObj, activeWorkspaceId: activeWorkspace?.id }, workspaces: resolved.workspaces, workspaceRoles: resolved.workspaceRoles, workspace: activeWorkspace, loading: false, error: null });
+    } catch (error) {
+      console.error('[auth] sign-in workspace hydration failed', error instanceof Error ? error.message : error);
+      set({ loading: false, error: error instanceof Error ? error.message : 'Account access denied' });
+      throw error;
     }
   },
 
   loginWithGoogle: async () => {
     set({ loading: true, error: null });
-    try {
-      if (!auth) throw new Error("Firebase Auth is offline");
-      const provider = new GoogleAuthProvider();
-      const cred = await signInWithPopup(auth, provider);
-      const { userObj, workspaces, workspaceRoles } = await resolveUserRecord(cred.user);
-
-      set({
-        user: userObj,
-        workspaces,
-        workspaceRoles,
-        workspace: workspaces[0] || null,
-        loading: false,
-        error: null
-      });
-    } catch (err: any) {
-      if (auth.currentUser) await signOut(auth).catch(() => undefined);
-      const friendlyError = err.message || "Google Authentication failed or was closed.";
-      set({ loading: false, error: friendlyError });
-      throw new Error(friendlyError);
-    }
+    const { error } = await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.origin } });
+    if (error) { set({ loading: false, error: error.message }); throw error; }
   },
 
   logout: async () => {
-    if (auth) {
-      try {
-        await signOut(auth);
-      } catch (e) {
-        // ignore
-      }
-    }
-    set({ user: null, workspace: null, workspaces: [], workspaceRoles: {} });
+    await supabase.auth.signOut();
+    set({ user: null, workspace: null, workspaces: [], workspaceRoles: {}, loading: false });
   },
 
-  setWorkspace: (workspaceId: string) => {
-    const ws = get().workspaces.find(w => w.id === workspaceId);
-    if (ws) set({ workspace: ws });
-  }
+  setWorkspace: (workspaceId) => {
+    const workspace = get().workspaces.find(w => w.id === workspaceId);
+    if (workspace) { window.localStorage.setItem('bennie.activeWorkspaceId', workspaceId); set({ workspace, user: get().user ? { ...get().user!, activeWorkspaceId: workspaceId } : null }); }
+  },
 }));
