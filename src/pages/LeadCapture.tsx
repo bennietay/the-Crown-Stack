@@ -15,6 +15,32 @@ const EMPTY_FORM: FormState = {
   service: "", budget: "", timing: "", message: "", consent: false, _honey: "",
 };
 
+// Render a useful, branded form immediately while the tenant-specific settings hydrate.
+// This prevents a cold-start network delay from looking like a broken public page.
+const DEFAULT_SETTINGS = {
+  business: { name: "Bennie Studio" },
+  leadCapture: {
+    eyebrow: "Free project review",
+    headline: "Turn your website into a reliable source of enquiries.",
+    subheadline: "Tell us what you are building and we will recommend the fastest practical next step.",
+    benefitBullets: ["Clear conversion priorities", "A practical scope and budget range", "A response within one business day"],
+    responsePromise: "Reply within one business day",
+    offerTitle: "Request your project review",
+    ctaLabel: "Get my project review",
+    trustNote: "Your details stay private and are only used to respond to this enquiry.",
+    whatsappUrl: "https://wa.me/60172069682",
+    bookingUrl: "",
+    privacyUrl: "",
+    termsUrl: "",
+    requireCompany: false,
+    requirePhone: true,
+    requireCountry: false,
+    serviceOptions: ["Launch Website", "Growth Website + SEO", "Care Plan", "Custom Application"],
+    budgetRanges: ["RM1,500 - RM3,000", "RM3,000 - RM6,000", "RM6,000 - RM12,000", "RM12,000+"],
+    timingOptions: ["ASAP", "Within 2 weeks", "Within 1 month", "1–3 months", "Just exploring"],
+  },
+};
+
 const inputClass = "mt-1 block w-full rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-sm shadow-sm outline-none transition focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10";
 
 export function LeadCapture() {
@@ -23,7 +49,7 @@ export function LeadCapture() {
   const [loadError, setLoadError] = useState("");
   const [formError, setFormError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [settings, setSettings] = useState<any>(null);
+  const [settings, setSettings] = useState<any>(DEFAULT_SETTINGS);
   const [formData, setFormData] = useState<FormState>(EMPTY_FORM);
 
   const workspaceId = useMemo(() => new URLSearchParams(window.location.search).get("workspace") || supabaseWorkspaceId, []);
@@ -34,7 +60,7 @@ export function LeadCapture() {
         if (!res.ok) throw new Error();
         return res.json();
       })
-      .then(setSettings)
+      .then((data) => setSettings((previous: any) => ({ ...previous, ...data, leadCapture: { ...previous.leadCapture, ...(data.leadCapture || {}) } })))
       .catch(() => setLoadError("The enquiry form is temporarily unavailable. Please try again later."));
   }, [workspaceId]);
 
@@ -103,9 +129,6 @@ export function LeadCapture() {
     }
   };
 
-  if (loadError) return <main className="min-h-screen bg-slate-50 flex items-center justify-center p-6 text-center text-red-700">{loadError}</main>;
-  if (!settings) return <main className="min-h-screen bg-slate-50 flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-indigo-500" aria-label="Loading enquiry form" /></main>;
-
   const capture = settings.leadCapture;
   const whatsappUrl = capture.whatsappUrl || "";
   const bookingUrl = capture.bookingUrl || "";
@@ -147,7 +170,7 @@ export function LeadCapture() {
           <CardContent className="px-5 py-7 sm:px-8 sm:py-9">
             <div className="mb-7"><h2 className="text-2xl font-bold">{capture.offerTitle || "Request your project review"}</h2><p className="mt-2 text-sm leading-6 text-slate-600">Share the basics below. You’ll get a useful recommendation—not a generic sales pitch.</p></div>
             <form onSubmit={handleSubmit} noValidate className="space-y-5">
-              {formError && <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800" role="alert"><strong>Please check the form.</strong><p className="mt-1">{formError}</p></div>}
+              {(formError || loadError) && <div className={`rounded-xl border p-4 text-sm ${formError ? "border-red-200 bg-red-50 text-red-800" : "border-amber-200 bg-amber-50 text-amber-900"}`} role="alert">{formError ? <><strong>Please check the form.</strong><p className="mt-1">{formError}</p></> : <p>{loadError} You can still submit this enquiry using the secure fallback form.</p>}</div>}
               <input type="text" name="_honey" className="hidden" value={formData._honey} onChange={(e) => update("_honey", e.target.value)} tabIndex={-1} autoComplete="off" />
               <div className="grid gap-5 sm:grid-cols-2">
                 <div><label htmlFor="name" className="text-sm font-semibold text-slate-800">Name *</label><input id="name" name="name" autoComplete="name" className={inputClass} value={formData.name} onChange={(e) => update("name", e.target.value)} aria-invalid={!!fieldErrors.name} aria-describedby={describedBy("name")} /><FieldError name="name" /></div>

@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { Role } from "../types";
-import { createSupabaseRequestClient } from "./supabase";
+import { createSupabaseRequestClient, supabaseServer } from "./supabase";
 
 export interface RequestContext {
   uid: string;
@@ -210,8 +210,9 @@ export const logAuditEvent = async (event: {
   console.log(JSON.stringify({ event: "audit_log", ...auditEntry }));
 
   try {
-    const token = event.requestId && undefined;
-    await createSupabaseRequestClient(token).from("bos_records").upsert({
+    // Audit events are written by trusted server code. Use the service-role client
+    // so RLS policies cannot silently drop observability records.
+    await supabaseServer.from("bos_records").upsert({
       workspace_id: event.workspaceId,
       collection_name: "audit_logs",
       record_id: auditEntry.id,

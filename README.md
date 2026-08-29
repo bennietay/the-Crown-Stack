@@ -8,7 +8,7 @@ Bennie Business OS is Bennie Studio's focused revenue workspace. The production 
 - secure public proposal links with durable acceptance records;
 - advanced business, pricing, lead-form and provider-readiness settings.
 
-Prototype AI, automated messaging, hosting, customer-portal, reconciliation and simulated payment features are not exposed in the production app.
+Prototype AI, hosting and simulated payment features are not exposed in the production app. Stripe Checkout, optional Resend email follow-up, and free WhatsApp click-to-chat are production integrations when their server-side environment variables are configured.
 
 ## Local verification
 
@@ -45,7 +45,7 @@ PUBLIC_PRIVACY_URL=
 PUBLIC_TERMS_URL=
 ```
 
-Do not enter service secrets in the browser or commit them to Git. Online payments, email automation and WhatsApp API automation are not part of this release.
+Do not enter service secrets in the browser or commit them to Git. The WhatsApp API remains intentionally unconfigured; click-to-chat is the free-first channel.
 
 Vite embeds every `VITE_*` value at build time. Never expose a Supabase service-role key in browser code; the publishable key is protected by RLS. For a production Vercel release, deploy the source with `vercel deploy --prod` so the cloud Production variables are used.
 

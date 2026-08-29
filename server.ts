@@ -471,9 +471,7 @@ app.post("/api/capture", captureLimiter, async (req: AuthenticatedRequest, res) 
   }
 });
 
-app.post("/api/outreach/process-due", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin"]), async (req: AuthenticatedRequest, res) => {
-  const workspaceId = req.workspaceId!;
-  try {
+async function processDueOutreach(workspaceId: string, actor: { uid: string; email?: string }, requestId?: string) {
     const settings = await readSettings(workspaceId);
     const [{ data: taskRows, error: taskError }, { data: leadRows, error: leadError }] = await Promise.all([
       supabaseServer.from("bos_records").select("record_id,data").match({ workspace_id: workspaceId, collection_name: "tasks", is_soft_deleted: false }),
@@ -503,11 +501,30 @@ app.post("/api/outreach/process-due", authenticateUser, requireWorkspace(), requ
         sent++;
       } catch (error: any) { errors.push(`${task.id}: ${error?.message || "send failed"}`); }
     }
-    await logAuditEvent({ workspaceId, userId: req.user!.uid, userEmail: req.user!.email, action: "outreach_queue_processed", resourceType: "outreach", resourceId: workspaceId, after: { due: due.length, sent, skipped, errors: errors.length }, requestId: req.requestId });
-    return res.json({ success: true, due: due.length, sent, skipped, errors });
+    await logAuditEvent({ workspaceId, userId: actor.uid, userEmail: actor.email, action: "outreach_queue_processed", resourceType: "outreach", resourceId: workspaceId, after: { due: due.length, sent, skipped, errors: errors.length }, requestId });
+    return { success: true, due: due.length, sent, skipped, errors };
+}
+
+app.post("/api/outreach/process-due", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin"]), async (req: AuthenticatedRequest, res) => {
+  try {
+    return res.json(await processDueOutreach(req.workspaceId!, { uid: req.user!.uid, email: req.user!.email }, req.requestId));
   } catch (error) {
     console.error("Outreach queue processing failed", error);
     return res.status(503).json({ error: "Outreach queue could not be processed" });
+  }
+});
+
+// Vercel Cron invokes this endpoint without a user session. Keep it fail-closed
+// behind CRON_SECRET and process only the configured workspace.
+app.post("/api/cron/outreach", async (req, res) => {
+  const expected = String(process.env.CRON_SECRET || "");
+  const supplied = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  if (!expected || supplied !== expected) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    return res.json(await processDueOutreach(supabaseWorkspaceId, { uid: "vercel_cron", email: "cron@bennietay.com" }, String(req.headers["x-request-id"] || "cron")));
+  } catch (error) {
+    console.error("Scheduled outreach processing failed", error);
+    return res.status(503).json({ error: "Scheduled outreach could not be processed" });
   }
 });
 

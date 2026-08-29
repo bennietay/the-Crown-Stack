@@ -54,6 +54,7 @@ const Analytics = lazyWithChunkRecovery(() => import("./pages/Analytics").then(m
 const OperationsControl = lazyWithChunkRecovery(() => import("./pages/OperationsControl").then(module => ({ default: module.OperationsControl })), "operations-control");
 const DailyBrief = lazyWithChunkRecovery(() => import("./pages/DailyBrief").then(module => ({ default: module.DailyBrief })), "daily-brief");
 const EtsyOperations = lazyWithChunkRecovery(() => import("./pages/EtsyOperations").then(module => ({ default: module.EtsyOperations })), "etsy-operations");
+const AffiliateLanding = lazyWithChunkRecovery(() => import("./pages/AffiliateLanding").then(module => ({ default: module.AffiliateLanding })), "affiliate-landing");
 
 const ADMIN: Role[] = ["super_admin", "workspace_admin"];
 const SALES: Role[] = [...ADMIN, "sales"];
@@ -108,6 +109,9 @@ function ApplicationRoutes() {
 
   if (pathname === "/capture") return <LeadCapture />;
   if (pathname.startsWith("/p/")) return <ProposalView />;
+  // Affiliate content is intentionally public; it is a separate acquisition business,
+  // not an authenticated admin workspace route.
+  if (["/affiliate", "/tools", "/guides", "/print-on-demand", "/affiliate-disclosure", "/printify", "/canva", "/print-on-demand/etsy-printify", "/erank", "/placeit", "/shopify"].includes(pathname)) return <AffiliateLanding />;
 
   if (loading) return <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm font-medium text-slate-500">Loading application…</div>;
   if (error) {

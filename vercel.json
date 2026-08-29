@@ -9,6 +9,9 @@
       "includeFiles": "dist/**"
     }
   },
+  "crons": [
+    { "path": "/api/cron/outreach", "schedule": "0 1 * * *" }
+  ],
   "rewrites": [
     { "source": "/healthz", "destination": "/api/index" },
     { "source": "/readyz", "destination": "/api/index" },

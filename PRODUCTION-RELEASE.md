@@ -2,35 +2,39 @@
 
 ## Verified locally
 
-- TypeScript passes with `npm run lint`.
-- 33/33 focused production tests pass with `npm test`.
-- The optimized production build completes with `npm run build`.
+- `npm run lint` passes.
+- `npm test` passes (46 tests).
+- `npm run build` completes successfully.
 - `npm audit --omit=dev` reports zero known vulnerabilities.
-- Public lead-form desktop, mobile, validation and success states were verified in-browser.
-- Production login contains no demo credentials, role picker or public registration.
+- Public lead capture renders immediately with a branded fallback while tenant settings load.
+- Public proposal links calculate totals server-side and create Stripe Checkout sessions when Stripe is configured.
+- Outreach tasks require a website audit before custom email is sent.
 
-## Required deployment secrets
+## Required Vercel environment
 
-- `NODE_ENV=production`
 - `APP_MODE=live`
-- `FIREBASE_SERVICE_ACCOUNT_KEY`
-- Firebase web-app environment values listed in `.env.example`
+- `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_WORKSPACE_ID` and the matching `VITE_*` values
+- `BOOTSTRAP_ADMIN_EMAIL`
+- `CRON_SECRET` (long random value; required for the daily outreach cron)
 
-Online checkout is intentionally unavailable in this release. Proposal acceptance clearly explains that payment instructions follow separately.
+Configure Stripe (`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`) and Resend (`RESEND_API_KEY`, `EMAIL_FROM`) only when those channels are ready to send real customer communications. Keep all service keys server-side.
 
-## Free-first policy
+## Free-first monetization
 
-- Firebase Authentication and the default Firestore database are the only required Google services.
-- Paid AI calls and AI automation are not required for the revenue core.
-- Start with free WhatsApp click-to-chat through `PUBLIC_WHATSAPP_URL`.
-- Add paid WhatsApp API only after lead volume justifies automated delivery and consent handling.
+- WhatsApp click-to-chat uses the free `PUBLIC_WHATSAPP_URL` destination.
+- Stripe Checkout is optional and charges only when a customer accepts a persisted proposal.
+- Email automation is optional; the queue can be reviewed manually through `/api/outreach/process-due`.
+- The scheduled queue endpoint is fail-closed until `CRON_SECRET` is configured; the free-tier cron runs daily at 09:00 Malaysia time.
 
-## Before promotion
+## Release gates
 
-1. Configure Firebase and the first workspace administrator.
-2. Set preview environment variables in Vercel.
-3. Deploy a preview, not production.
-4. Verify auth, durable lead capture and proposal acceptance against the real Firebase project.
-5. Promote the exact verified preview only after approval.
+1. Deploy a preview and run lint, tests and build.
+2. Verify `/healthz` and `/readyz` return 200.
+3. Submit a test lead through `/capture` and confirm it appears in Supabase.
+4. Verify invited admin sign-in and workspace membership.
+5. Open a public proposal, confirm the totals, and test Stripe in test mode before switching to live keys.
+6. Confirm public affiliate acquisition routes (`/affiliate`, `/tools`, `/guides`, `/print-on-demand`) load without authentication.
+7. Promote the verified preview to production.
 
-GitHub and Vercel production remain unchanged until these gates are complete.
+Do not put customer data, service keys or payment secrets in the browser or Git history.
