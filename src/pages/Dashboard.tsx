@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useDataStore } from "@/src/store/dataStore";
 import { useAuthStore } from "@/src/store/authStore";
 import { useSettingsStore } from "@/src/store/settingsStore";
@@ -17,7 +17,7 @@ import { businessTopology } from "@/src/store/businessStore";
 
 export function Dashboard() {
   const workspace = useAuthStore(state => state.workspace);
-  const { leads, opportunities, proposals, tasks, customers, tickets, revenueEvents, revenueGoals, moneyTasks, notifications, diamondProspects, diamondCustomers, diamondFollowUps, diamondPurchases } = useDataStore();
+  const { leads, opportunities, proposals, tasks, customers, tickets, revenueEvents, revenueGoals, moneyTasks, notifications, diamondProspects, diamondCustomers, diamondFollowUps, diamondPurchases, addTask } = useDataStore();
   const settings = useSettingsStore(state => state.settings);
 
   const [timeFilter, setTimeFilter] = useState<"today" | "week" | "overdue" | "high_value">("today");
@@ -86,6 +86,21 @@ export function Dashboard() {
   const waasWon = wLeads.filter(l => l.status === "won").length;
   const amwayContacted = diamondProspects.filter(p => !["Lead", "Not Interested", "Archived"].includes(p.status)).length;
   const amwayJoined = diamondProspects.filter(p => ["Joined ABO", "Joined PC"].includes(p.status)).length;
+
+  // Idempotent revenue automation: materialize only missing actions in the shared queue.
+  useEffect(() => {
+    if (!workspace?.id) return;
+    const cutoff = now.getTime() - 48 * 60 * 60 * 1000;
+    const pending = wTasks.filter(task => task.status === "pending");
+    const candidates = [
+      ...wLeads.filter(lead => ["contacted", "replied", "discovery", "proposal", "negotiation"].includes(lead.status) && new Date(lead.lastContactedAt || lead.createdAt).getTime() < cutoff).map(lead => ({ leadId: lead.id, title: `Re-engage stale WAAS lead: ${lead.contactName}`, channel: "email" as const, reason: "No recorded contact in 48 hours", recommendedAction: "Send a personalized value follow-up and log the reply." })),
+      ...wProposals.filter(proposal => proposal.status === "sent" && new Date(proposal.updatedAt || proposal.createdAt).getTime() < now.getTime() - 3 * 86400000).map(proposal => ({ opportunityId: proposal.opportunityId, title: `Proposal decision follow-up: ${proposal.title || proposal.id}`, channel: "call" as const, reason: "Proposal has been sent for more than 3 days", recommendedAction: "Ask for the decision date or resolve the main objection." })),
+      ...diamondCustomers.filter(customer => customer.isActive && customer.nextReorderDate && customer.nextReorderDate <= new Date(now.getTime() + 7 * 86400000).toISOString().slice(0, 10)).map(customer => ({ customerId: customer.id, title: `Amway reorder follow-up: ${customer.name}`, channel: "whatsapp" as const, reason: "Customer reorder is due within 7 days", recommendedAction: "Check usage, recommend the next order, and record the outcome." })),
+    ];
+    const missing = candidates.filter(candidate => !pending.some(task => task.title === candidate.title));
+    if (!missing.length) return;
+    void Promise.all(missing.slice(0, 30).map(candidate => addTask({ workspaceId: workspace.id, ...candidate, category: "revenue", dueDate: todayKey, status: "pending", owner: settings.sales.defaultOwner || "usr-bennie" }))).catch(error => console.error("Revenue action automation failed", error));
+  }, [workspace?.id, wLeads, wProposals, diamondCustomers, wTasks, addTask, settings.sales.defaultOwner, todayKey]);
   const actionItems = [
     ...hotLeads.slice(0, 20).map(l => `Contact hot WAAS lead: ${l.contactName}`),
     ...overdueTasks.slice(0, 10).map(t => `Complete overdue follow-up: ${t.contactName || t.title}`),
