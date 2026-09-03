@@ -12,7 +12,7 @@ import { Button } from "@/src/components/ui/button";
 import { Badge } from "@/src/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/src/components/ui/card";
 import { revenueByBusiness, summarizeRevenue } from "@/src/lib/revenue";
-import { activeRevenueEvents, goalPacing, isWaasLead, outreachCompleted, weightedOpportunityValue } from "@/src/lib/revenueExecution";
+import { activeRevenueEvents, conversionRate, goalPacing, isWaasLead, outreachCompleted, weightedOpportunityValue } from "@/src/lib/revenueExecution";
 import { businessTopology } from "@/src/store/businessStore";
 
 export function Dashboard() {
@@ -82,6 +82,10 @@ export function Dashboard() {
   const activeGoalPacing = activeGoal ? goalPacing(activeGoal.targetAmount, monthRevenue.collected, activeGoal.startDate, activeGoal.endDate, now) : goalPacing(target, monthRevenue.collected, `${monthKey}-01`, `${monthKey}-31`, now);
   const outreachTarget = settings?.business?.dailyOutreachTarget ?? 30;
   const outreachDone = outreachCompleted(wLeads, todayKey);
+  const waasReplied = wLeads.filter(l => ["replied", "discovery", "proposal", "negotiation", "won"].includes(l.status)).length;
+  const waasWon = wLeads.filter(l => l.status === "won").length;
+  const amwayContacted = diamondProspects.filter(p => !["Lead", "Not Interested", "Archived"].includes(p.status)).length;
+  const amwayJoined = diamondProspects.filter(p => ["Joined ABO", "Joined PC"].includes(p.status)).length;
   const actionItems = [
     ...hotLeads.slice(0, 20).map(l => `Contact hot WAAS lead: ${l.contactName}`),
     ...overdueTasks.slice(0, 10).map(t => `Complete overdue follow-up: ${t.contactName || t.title}`),
@@ -268,6 +272,8 @@ export function Dashboard() {
         <Card className="border-indigo-200 bg-indigo-50/50"><CardHeader><CardTitle className="text-lg">What should Bennie do TODAY to make money?</CardTitle></CardHeader><CardContent><p className="text-sm font-semibold text-slate-800">Close the highest-probability conversations before creating new work.</p><ol className="mt-3 space-y-2">{(actionItems.length ? actionItems : ["Add or import prospects, then contact the highest-scored person today."]).slice(0, 7).map((item, i) => <li key={`${item}-${i}`} className="flex gap-3 text-sm"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white">{i + 1}</span><span>{item}</span></li>)}</ol></CardContent></Card>
         <Card><CardHeader><CardTitle className="text-lg">Business performance</CardTitle></CardHeader><CardContent className="space-y-3"><PerformanceRow label="WAAS" value={`MYR ${summarizeRevenue(waasRevenue).collected.toLocaleString()}`} detail={`${wLeads.length} leads · ${wOpps.length} opportunities · ${wonThisMonthMRC.toLocaleString()} MRR`} href="/leads" /><PerformanceRow label="Amway" value={`MYR ${summarizeRevenue(amwayRevenue).collected.toLocaleString()}`} detail={`${diamondProspects.length} prospects · ${diamondCustomers.length} customers · ${diamondPurchases.length} purchases`} href="/diamond" /></CardContent></Card>
       </div>
+
+      <Card><CardHeader><CardTitle className="text-lg">Conversion scoreboard</CardTitle><p className="text-xs text-slate-500">Activity is only useful when it moves people toward revenue.</p></CardHeader><CardContent className="grid gap-4 md:grid-cols-2"><div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-4"><div className="flex items-center justify-between"><p className="font-bold text-slate-900">WAAS</p><span className="text-xs font-bold text-indigo-700">{conversionRate(waasReplied, wLeads.length)}% lead → reply</span></div><p className="mt-2 text-sm text-slate-600">{wLeads.length} leads · {waasReplied} replied/active · {waasWon} won</p><div className="mt-2 h-2 overflow-hidden rounded-full bg-white"><div className="h-full rounded-full bg-indigo-600" style={{ width: `${conversionRate(waasReplied, wLeads.length)}%` }} /></div><p className="mt-2 text-xs text-slate-500">Reply → win: {conversionRate(waasWon, waasReplied)}%</p></div><div className="rounded-lg border border-emerald-100 bg-emerald-50/40 p-4"><div className="flex items-center justify-between"><p className="font-bold text-slate-900">Amway</p><span className="text-xs font-bold text-emerald-700">{conversionRate(amwayJoined, diamondProspects.length)}% joined</span></div><p className="mt-2 text-sm text-slate-600">{diamondProspects.length} prospects · {amwayContacted} contacted · {amwayJoined} joined PC/ABO</p><div className="mt-2 h-2 overflow-hidden rounded-full bg-white"><div className="h-full rounded-full bg-emerald-600" style={{ width: `${conversionRate(amwayJoined, diamondProspects.length)}%` }} /></div><p className="mt-2 text-xs text-slate-500">Contacted → joined: {conversionRate(amwayJoined, amwayContacted)}%</p></div></CardContent></Card>
 
       <div className="grid gap-3 md:grid-cols-2">
         <BusinessSnapshot title="WAAS" href="/leads" primary={`${wLeads.length.toLocaleString()} leads`} secondary={`${wOpps.length.toLocaleString()} opportunities · ${wCustomers.length.toLocaleString()} customers`} />

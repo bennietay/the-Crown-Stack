@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { activeRevenueEvents, goalPacing, opportunityProbability, weightedOpportunityValue } from "../src/lib/revenueExecution";
+import { activeRevenueEvents, conversionRate, goalPacing, opportunityProbability, weightedOpportunityValue } from "../src/lib/revenueExecution";
 
 describe("revenue execution", () => {
   it("excludes inactive business units from operational revenue", () => {
@@ -24,5 +24,10 @@ describe("revenue execution", () => {
     assert.equal(pacing.collected, 6000);
     assert.equal(pacing.gap, 4000);
     assert.equal(pacing.onTrack, true);
+  });
+
+  it("returns safe conversion rates when there is no denominator", () => {
+    assert.equal(conversionRate(3, 10), 30);
+    assert.equal(conversionRate(1, 0), 0);
   });
 });

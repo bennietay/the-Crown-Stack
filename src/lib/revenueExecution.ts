@@ -38,3 +38,7 @@ export function goalPacing(target: number, collected: number, startDate: string,
 export function outreachCompleted(leads: Lead[], dayKey: string): number {
   return leads.filter((lead) => lead.lastContactedAt?.slice(0, 10) === dayKey).reduce((sum, lead) => sum + (lead.messagesSentCount ?? 0), 0);
 }
+
+export function conversionRate(numerator: number, denominator: number): number {
+  return denominator > 0 ? Math.round((numerator / denominator) * 100) : 0;
+}
