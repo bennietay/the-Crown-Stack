@@ -213,7 +213,7 @@ export function Settings() {
                 <p className="text-[11px] text-slate-500">Default sender format for manual & automated notifications.</p>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 pt-2">
+              <div className="grid grid-cols-2 gap-4 pt-2 md:grid-cols-3">
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-slate-700 flex items-center gap-1">
                     <Target className="w-3.5 h-3.5 text-indigo-500" />
@@ -238,6 +238,19 @@ export function Settings() {
                     value={localSettings.business.leadSlaHours} 
                     onChange={e => updateBusiness('leadSlaHours', Number(e.target.value))} 
                   />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-700">Daily Outreach Target</label>
+                  <input type="number" min="1" className="w-full rounded-lg border border-slate-200 bg-slate-50/50 p-2.5 text-xs font-semibold text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-600 focus:outline-none transition-all" value={localSettings.business.dailyOutreachTarget ?? 30} onChange={e => updateBusiness('dailyOutreachTarget', Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-700">WAAS MRR Target ({localSettings.business.currency})</label>
+                  <input type="number" min="0" className="w-full rounded-lg border border-slate-200 bg-slate-50/50 p-2.5 text-xs font-semibold text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-600 focus:outline-none transition-all" value={localSettings.business.waasMonthlyTarget ?? 10000} onChange={e => updateBusiness('waasMonthlyTarget', Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-700">Amway Monthly Target ({localSettings.business.currency})</label>
+                  <input type="number" min="0" className="w-full rounded-lg border border-slate-200 bg-slate-50/50 p-2.5 text-xs font-semibold text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-600 focus:outline-none transition-all" value={localSettings.business.amwayMonthlyTarget ?? 5000} onChange={e => updateBusiness('amwayMonthlyTarget', Number(e.target.value))} />
                 </div>
               </div>
             </CardContent>
