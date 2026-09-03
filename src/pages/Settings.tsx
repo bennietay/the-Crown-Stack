@@ -637,9 +637,6 @@ export function Settings() {
                 <IntegrationStatus name="WhatsApp Business API" configured={!!localSettings.integrations?.whatsappApiConfigured} subtitle="Automated outbound messages" />
                 <IntegrationStatus name="Online payments" configured={!!localSettings.integrations?.paymentsConfigured} subtitle="Stripe Checkout and webhooks" />
                 <IntegrationStatus name="Transactional email" configured={!!localSettings.integrations?.emailConfigured} subtitle="Resend delivery and notifications" />
-                <IntegrationStatus name="Affiliate operations API" configured={!!localSettings.integrations?.affiliateApiConfigured} subtitle="Secure server-to-server event ingestion" />
-                <IntegrationStatus name="Etsy Open API" configured={!!localSettings.integrations?.etsyConfigured} subtitle="OAuth connection, listings and orders" />
-                <IntegrationStatus name="Printify" configured={!!localSettings.integrations?.printifyConfigured} subtitle="Products, fulfilment and tracking" />
                 <IntegrationStatus name="Gemini AI" configured={!!localSettings.integrations?.aiConfigured} subtitle="Evidence-bound CEO briefs and approved AI jobs" />
               </div>
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">
@@ -647,8 +644,7 @@ export function Settings() {
                 <p className="mt-1 font-mono text-[11px] break-words">SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY / PUBLIC_WHATSAPP_URL</p>
                 <p className="mt-1 font-mono text-[11px] break-words">STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET / RESEND_API_KEY / EMAIL_FROM</p>
                 <p className="mt-1 font-mono text-[11px] break-words">WHATSAPP_ACCESS_TOKEN / WHATSAPP_PHONE_NUMBER_ID</p>
-                <p className="mt-1 font-mono text-[11px] break-words">AFFILIATE_INGEST_API_KEY / CREDENTIAL_ENCRYPTION_KEY</p>
-                <p className="mt-1 font-mono text-[11px] break-words">ETSY_API_KEY / ETSY_SHARED_SECRET / ETSY_REDIRECT_URI / PRINTIFY_API_TOKEN</p>
+                <p className="mt-1 font-mono text-[11px] break-words">CREDENTIAL_ENCRYPTION_KEY / CRON_SECRET</p>
                 <p className="mt-1 font-mono text-[11px] break-words">GEMINI_API_KEY / GEMINI_MODEL</p>
                 <p className="mt-2">Changing a secret later requires no code change—update the deployment environment and redeploy.</p>
               </div>

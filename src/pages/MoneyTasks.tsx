@@ -3,7 +3,7 @@ import { useAuthStore } from "../store/authStore";
 import { useDataStore } from "../store/dataStore";
 import { BusinessUnit, MoneyTask } from "../types";
 
-const units: BusinessUnit[] = ["WAAS", "ETSY", "AFFILIATE", "AMWAY"];
+const units: BusinessUnit[] = ["WAAS", "AMWAY"];
 const expectedImpact = (task: MoneyTask) => task.estimatedRevenueImpact === undefined || task.probability === undefined ? null : task.estimatedRevenueImpact * task.probability / 100;
 
 export function MoneyTasks() {

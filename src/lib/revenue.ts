@@ -39,7 +39,7 @@ export function summarizeRevenue(events: RevenueEvent[]): RevenueTotals {
 }
 
 export function revenueByBusiness(events: RevenueEvent[]) {
-  const units: BusinessUnit[] = ["WAAS", "ETSY", "AFFILIATE", "AMWAY"];
+  const units: BusinessUnit[] = ["WAAS", "AMWAY"];
   return units.map(businessUnit => ({ businessUnit, ...summarizeRevenue(events.filter(event => event.businessUnit === businessUnit)) }));
 }
 

@@ -43,7 +43,9 @@ interface DataState {
 
 const now = () => new Date().toISOString();
 const makeId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
-const collectionState: Record<string, string> = { leads: 'leads', opportunities: 'opportunities', customers: 'customers', tickets: 'tickets', products: 'products', proposals: 'proposals', tasks: 'tasks', diamondProspects: 'diamond_prospects', diamondCustomers: 'diamond_customers', diamondFollowUps: 'diamond_followups', diamondProducts: 'diamond_products', diamondPurchases: 'diamond_purchases', diamondScripts: 'diamond_scripts', revenueEvents: 'revenue_events', affiliateRecords: 'affiliate_records', etsyRecords: 'etsy_records', etsyProducts: 'etsy_products', printifyRecords: 'printify_records', revenueGoals: 'revenue_goals', moneyTasks: 'money_tasks', notifications: 'notifications', automations: 'automations', activityRecords: 'activity_records' };
+// Affiliate/Etsy records remain in Supabase for historical retention, but are no
+// longer loaded into the active operating dashboard.
+const collectionState: Record<string, string> = { leads: 'leads', opportunities: 'opportunities', customers: 'customers', tickets: 'tickets', products: 'products', proposals: 'proposals', tasks: 'tasks', diamondProspects: 'diamond_prospects', diamondCustomers: 'diamond_customers', diamondFollowUps: 'diamond_followups', diamondProducts: 'diamond_products', diamondPurchases: 'diamond_purchases', diamondScripts: 'diamond_scripts', revenueEvents: 'revenue_events', revenueGoals: 'revenue_goals', moneyTasks: 'money_tasks', notifications: 'notifications', automations: 'automations', activityRecords: 'activity_records' };
 
 async function listCollection(workspaceId: string, collectionName: string) {
   const { data, error } = await supabase.from('bos_records').select('record_id,data').eq('workspace_id', workspaceId).eq('collection_name', collectionName).eq('is_soft_deleted', false);

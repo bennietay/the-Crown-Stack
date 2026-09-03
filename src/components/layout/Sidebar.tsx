@@ -22,7 +22,6 @@ import {
   ScrollText,
   BarChart3,
   Sparkles,
-  ShoppingBag,
 } from "lucide-react";
 
 const bennieNavigation = [
@@ -46,8 +45,6 @@ const bennieNavigation = [
   ]},
   { section: "Businesses", items: [
     { name: "WAAS", href: "/leads", icon: BriefcaseBusiness },
-    { name: "Etsy", href: "/etsy", icon: ShoppingBag },
-    { name: "Affiliate", href: "/businesses", icon: BriefcaseBusiness },
     { name: "Amway", href: "/diamond", icon: Gem },
   ]},
   { section: "Operations", items: [
@@ -93,10 +90,10 @@ export function Sidebar({ onClose, className }: SidebarProps) {
       return true;
     }
     if (activeRole === "sales") {
-      return ["/", "/queue", "/money-tasks", "/revenue", "/goals", "/analytics", "/brief", "/businesses", "/etsy", "/leads", "/pipeline", "/proposals", "/products", "/customers", "/diamond", "/notifications"].includes(href);
+      return ["/", "/queue", "/money-tasks", "/revenue", "/goals", "/analytics", "/brief", "/leads", "/pipeline", "/proposals", "/products", "/customers", "/diamond", "/notifications"].includes(href);
     }
     if (activeRole === "operations") {
-      return ["/", "/queue", "/money-tasks", "/revenue", "/goals", "/analytics", "/brief", "/businesses", "/etsy", "/products", "/customers", "/tickets", "/diamond", "/notifications"].includes(href);
+      return ["/", "/queue", "/money-tasks", "/revenue", "/goals", "/analytics", "/brief", "/products", "/customers", "/tickets", "/diamond", "/notifications"].includes(href);
     }
     if (activeRole === "support") {
       return ["/", "/customers", "/tickets", "/diamond", "/notifications"].includes(href);

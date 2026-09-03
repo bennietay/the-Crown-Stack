@@ -4,7 +4,7 @@ import { useDataStore } from "../store/dataStore";
 import { BusinessUnit, RevenueEvent } from "../types";
 import { summarizeRevenue } from "../lib/revenue";
 
-const units: BusinessUnit[] = ["WAAS", "AMWAY", "AFFILIATE", "ETSY"];
+const units: BusinessUnit[] = ["WAAS", "AMWAY"];
 export function Revenue() {
   const workspace = useAuthStore(s => s.workspace); const { revenueEvents, addRevenueEvent } = useDataStore();
   const events = revenueEvents.filter(e => e.workspaceId === workspace?.id); const [open, setOpen] = useState(false); const [saving, setSaving] = useState(false);

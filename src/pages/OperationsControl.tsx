@@ -4,7 +4,7 @@ import { useDataStore } from "../store/dataStore";
 import { AutomationDefinition, BusinessUnit, NotificationRecord } from "../types";
 
 type View = "notifications" | "automations" | "activity";
-const sources: Array<BusinessUnit | "SYSTEM"> = ["WAAS", "ETSY", "AFFILIATE", "AMWAY", "SYSTEM"];
+const sources: Array<BusinessUnit | "SYSTEM"> = ["WAAS", "AMWAY", "SYSTEM"];
 
 export function OperationsControl({ view }: { view: View }) {
   const workspace = useAuthStore(s => s.workspace); const user = useAuthStore(s => s.user);

@@ -39,7 +39,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
     ...data.proposals.map(row => ({ id: row.id, type: "Proposal", title: row.title || row.id, detail: row.status, href: "/proposals" })),
     ...data.customers.map(row => ({ id: row.id, type: "Customer", title: row.name, detail: row.email, href: "/customers" })),
     ...data.diamondProspects.map(row => ({ id: row.id, type: "Amway", title: row.name, detail: row.prospectType, href: "/diamond" })),
-    ...data.etsyProducts.map(row => ({ id: row.id, type: "Etsy", title: row.internalName, detail: `${row.niche} · ${row.status}`, href: "/etsy" })),
   ].filter(row => `${row.title} ${row.detail} ${row.type}`.toLowerCase().includes(normalizedSearch)).slice(0, 8);
 
   const openSearchResult = (href: string) => { setSearchQuery(""); navigate(href); };
@@ -60,7 +59,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
     const routeContext = location.pathname === "/" ? "all"
       : location.pathname === "/leads" ? "waas"
-      : location.pathname === "/etsy" ? "etsy"
       : location.pathname === "/diamond" ? "amway"
       : null;
     if (routeContext && routeContext !== activeBusiness) setActiveBusiness(routeContext);

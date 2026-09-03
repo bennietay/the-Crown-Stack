@@ -35,7 +35,8 @@ test("profit is not invented when domain costs are unknown", () => {
 test("business breakdown never mixes units", () => {
   const rows = revenueByBusiness([event(), event({ id: "rev-2", businessUnit: "ETSY", grossRevenue: 400 })]);
   assert.equal(rows.find(row => row.businessUnit === "WAAS")?.collected, 1000);
-  assert.equal(rows.find(row => row.businessUnit === "ETSY")?.collected, 400);
+  assert.equal(rows.find(row => row.businessUnit === "AMWAY")?.collected, 0);
+  assert.equal(rows.some(row => row.businessUnit === "ETSY"), false);
 });
 
 test("goal date calculations are inclusive and never divide by zero", () => {

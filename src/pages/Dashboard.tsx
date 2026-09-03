@@ -16,7 +16,7 @@ import { businessTopology } from "@/src/store/businessStore";
 
 export function Dashboard() {
   const workspace = useAuthStore(state => state.workspace);
-  const { leads, opportunities, proposals, tasks, customers, tickets, revenueEvents, revenueGoals, moneyTasks, notifications, etsyProducts, etsyRecords, printifyRecords, affiliateRecords, diamondProspects, diamondCustomers } = useDataStore();
+  const { leads, opportunities, proposals, tasks, customers, tickets, revenueEvents, revenueGoals, moneyTasks, notifications, diamondProspects, diamondCustomers, diamondFollowUps, diamondPurchases } = useDataStore();
   const settings = useSettingsStore(state => state.settings);
 
   const [timeFilter, setTimeFilter] = useState<"today" | "week" | "overdue" | "high_value">("today");
@@ -71,6 +71,20 @@ export function Dashboard() {
   const openTickets = wTickets.filter(t => t.status === "open" || t.status === "in_progress");
   const atRiskCustomers = wCustomers.filter(c => c.health && (c.health.status === "at_risk" || c.health.status === "attention_needed" || c.health.score < 70));
   const carePlanProspects = wCustomers.filter(c => c.waas && c.waas.status === "recommended");
+  const waasRevenue = workspaceRevenue.filter(event => event.businessUnit === "WAAS");
+  const amwayRevenue = workspaceRevenue.filter(event => event.businessUnit === "AMWAY");
+  const amwayProductProspects = diamondProspects.filter(p => p.prospectType === "Product Customer / PC" && !["Closed", "Not Interested", "Archived"].includes(p.status));
+  const amwayBusinessProspects = diamondProspects.filter(p => p.prospectType === "Business Builder / ABO" && !["Closed", "Not Interested", "Archived"].includes(p.status));
+  const dueAmwayFollowUps = diamondFollowUps.filter(f => !f.completed && new Date(f.dueDate).getTime() <= now.getTime());
+  const pipelineValue = Math.round(weightedPipeline + expectedOTC + expectedMRC + amwayProductProspects.length * 500 + amwayBusinessProspects.length * 3000);
+  const targetGap = Math.max(0, target - monthRevenue.collected);
+  const actionItems = [
+    ...hotLeads.slice(0, 20).map(l => `Contact hot WAAS lead: ${l.contactName}`),
+    ...overdueTasks.slice(0, 10).map(t => `Complete overdue follow-up: ${t.contactName || t.title}`),
+    ...amwayBusinessProspects.slice(0, 20).map(p => `Invite Amway presentation: ${p.name}`),
+    ...dueAmwayFollowUps.slice(0, 10).map(f => `Follow up with Amway contact: ${f.contactName}`),
+    ...wProposals.filter(p => p.status === "sent").slice(0, 10).map(p => `Close proposal: ${p.title || p.id}`),
+  ];
 
   // Generate Ranked "Today's Priorities" List
   let priorities: Array<{
@@ -216,8 +230,8 @@ export function Dashboard() {
       {/* HEADER & BRIEFING TRIGGER */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-slate-900">Solopreneur Command Centre</h2>
-          <p className="text-sm text-slate-500">Real-time daily operational cockpit for single-operator mastery.</p>
+          <h2 className="text-2xl font-bold tracking-tight text-slate-900">Revenue Command Center</h2>
+          <p className="text-sm text-slate-500">WAAS + Amway only. Start with the money, then execute the next best action.</p>
         </div>
         <div className="flex items-center gap-3">
           <Button onClick={handleGenerateActionPlan} className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white shadow-sm">
@@ -231,22 +245,26 @@ export function Dashboard() {
         <ExecutiveMetric label="Revenue this month" value={`MYR ${monthRevenue.collected.toLocaleString()}`} />
         <ExecutiveMetric label="Profit today" value={`MYR ${todayRevenue.profit.toLocaleString()}`} />
         <ExecutiveMetric label="Profit this month" value={`MYR ${monthRevenue.profit.toLocaleString()}`} />
-        <ExecutiveMetric label="Cash collected" value={`MYR ${totalRevenue.collected.toLocaleString()}`} />
-        <ExecutiveMetric label="Recurring collected" value={`MYR ${summarizeRevenue(workspaceRevenue.filter(event => event.sourceType === "subscription")).collected.toLocaleString()}`} />
-        <ExecutiveMetric label="New leads this month" value={wLeads.filter(lead => lead.createdAt.slice(0, 7) === monthKey).length.toLocaleString()} />
-        <ExecutiveMetric label="Deals / orders this month" value={workspaceRevenue.filter(event => event.occurredAt.slice(0, 7) === monthKey && ["sale", "commission"].includes(event.sourceType) && !["cancelled", "refunded"].includes(event.status)).length.toLocaleString()} />
-        <ExecutiveMetric label="Unread alerts" value={unreadNotifications.length.toLocaleString()} />
-        <ExecutiveMetric label="Goal progress" value={activeGoal ? `${Math.min(100, totalRevenue.collected / activeGoal.targetAmount * 100).toFixed(1)}%` : "No active goal"} />
+        <ExecutiveMetric label="Monthly target" value={`MYR ${target.toLocaleString()}`} />
+        <ExecutiveMetric label="Gap to target" value={`MYR ${targetGap.toLocaleString()}`} />
+        <ExecutiveMetric label="Pipeline value" value={`MYR ${pipelineValue.toLocaleString()}`} />
+        <ExecutiveMetric label="Forecast next 30d" value={`MYR ${Math.round(monthRevenue.expected + pipelineValue * 0.4).toLocaleString()}`} />
+        <ExecutiveMetric label="WAAS MRR" value={`MYR ${wonThisMonthMRC.toLocaleString()}`} />
+        <ExecutiveMetric label="Amway sales" value={`MYR ${amwayRevenue.filter(e => e.status === "collected").reduce((s,e) => s + (e.grossRevenue || 0), 0).toLocaleString()}`} />
+        <ExecutiveMetric label="Follow-ups due" value={(overdueTasks.length + dueAmwayFollowUps.length).toLocaleString()} />
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+        <Card className="border-indigo-200 bg-indigo-50/50"><CardHeader><CardTitle className="text-lg">What should Bennie do TODAY to make money?</CardTitle></CardHeader><CardContent><p className="text-sm font-semibold text-slate-800">Close the highest-probability conversations before creating new work.</p><ol className="mt-3 space-y-2">{(actionItems.length ? actionItems : ["Add or import prospects, then contact the highest-scored person today."]).slice(0, 7).map((item, i) => <li key={`${item}-${i}`} className="flex gap-3 text-sm"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white">{i + 1}</span><span>{item}</span></li>)}</ol></CardContent></Card>
+        <Card><CardHeader><CardTitle className="text-lg">Business performance</CardTitle></CardHeader><CardContent className="space-y-3"><PerformanceRow label="WAAS" value={`MYR ${summarizeRevenue(waasRevenue).collected.toLocaleString()}`} detail={`${wLeads.length} leads · ${wOpps.length} opportunities · ${wonThisMonthMRC.toLocaleString()} MRR`} href="/leads" /><PerformanceRow label="Amway" value={`MYR ${summarizeRevenue(amwayRevenue).collected.toLocaleString()}`} detail={`${diamondProspects.length} prospects · ${diamondCustomers.length} customers · ${diamondPurchases.length} purchases`} href="/diamond" /></CardContent></Card>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
         <BusinessSnapshot title="WAAS" href="/leads" primary={`${wLeads.length.toLocaleString()} leads`} secondary={`${wOpps.length.toLocaleString()} opportunities · ${wCustomers.length.toLocaleString()} customers`} />
-        <BusinessSnapshot title="Etsy" href="/etsy" primary={`${etsyProducts.filter(item => item.workspaceId === workspace?.id).length.toLocaleString()} internal products`} secondary={`${etsyRecords.filter(item => item.workspaceId === workspace?.id && item.kind === "order").length.toLocaleString()} Etsy orders · ${printifyRecords.filter(item => item.workspaceId === workspace?.id).length.toLocaleString()} Printify records`} />
-        <BusinessSnapshot title="Affiliate" href="/businesses" primary={`${affiliateRecords.filter(item => item.workspaceId === workspace?.id).length.toLocaleString()} tracked records`} secondary={`${affiliateRecords.filter(item => item.workspaceId === workspace?.id && item.kind === "commission").length.toLocaleString()} commission records`} />
-        <BusinessSnapshot title="Amway" href="/diamond" primary={`${diamondProspects.filter(item => item.workspaceId === workspace?.id).length.toLocaleString()} prospects`} secondary={`${diamondCustomers.filter(item => item.workspaceId === workspace?.id).length.toLocaleString()} customers`} />
+        <BusinessSnapshot title="Amway" href="/diamond" primary={`${diamondProspects.filter(item => item.workspaceId === workspace?.id).length.toLocaleString()} prospects`} secondary={`${diamondCustomers.filter(item => item.workspaceId === workspace?.id).length.toLocaleString()} customers · ${diamondFollowUps.filter(item => item.workspaceId === workspace?.id && !item.completed).length.toLocaleString()} follow-ups`} />
       </div>
 
-      <div className="rounded-xl border border-slate-200 bg-white p-4"><div className="flex flex-wrap items-end justify-between gap-2"><div><h3 className="font-bold text-slate-900">Revenue OS topology</h3><p className="text-xs text-slate-500">Select a business in the left rail to work its monetization loop.</p></div><span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">One command centre · four engines</span></div><div className="mt-4 grid gap-3 md:grid-cols-4">{businessTopology.map(business => <Link key={business.id} to={business.href} className="rounded-lg border border-slate-200 p-3 transition hover:border-indigo-300 hover:bg-indigo-50/30"><div className="flex items-center justify-between"><p className="text-xs font-extrabold uppercase tracking-[0.14em] text-indigo-600">{business.shortName}</p><ArrowRight className="h-3.5 w-3.5 text-slate-300" /></div><p className="mt-2 text-xs font-semibold text-slate-800">{business.monetization}</p><div className="mt-3 space-y-1">{business.nav.slice(0, 4).map((item, index) => <div key={item.name} className="flex items-center gap-2 text-[11px] text-slate-500"><span className="flex h-4 w-4 items-center justify-center rounded-full bg-slate-100 text-[9px] font-bold text-slate-500">{index + 1}</span>{item.name}</div>)}</div></Link>)}</div></div>
+      <div className="rounded-xl border border-slate-200 bg-white p-4"><div className="flex flex-wrap items-end justify-between gap-2"><div><h3 className="font-bold text-slate-900">Revenue Command Center</h3><p className="text-xs text-slate-500">Only WAAS and Amway are active revenue engines. Select one in the left rail to work its loop.</p></div><span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">2 focused engines</span></div><div className="mt-4 grid gap-3 md:grid-cols-2">{businessTopology.map(business => <Link key={business.id} to={business.href} className="rounded-lg border border-slate-200 p-3 transition hover:border-indigo-300 hover:bg-indigo-50/30"><div className="flex items-center justify-between"><p className="text-xs font-extrabold uppercase tracking-[0.14em] text-indigo-600">{business.shortName}</p><ArrowRight className="h-3.5 w-3.5 text-slate-300" /></div><p className="mt-2 text-xs font-semibold text-slate-800">{business.monetization}</p><div className="mt-3 space-y-1">{business.nav.slice(0, 4).map((item, index) => <div key={item.name} className="flex items-center gap-2 text-[11px] text-slate-500"><span className="flex h-4 w-4 items-center justify-center rounded-full bg-slate-100 text-[9px] font-bold text-slate-500">{index + 1}</span>{item.name}</div>)}</div></Link>)}</div></div>
 
       <div className="grid gap-4 xl:grid-cols-[1.35fr_1fr]">
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
@@ -403,6 +421,10 @@ export function Dashboard() {
 
 function BusinessSnapshot({ title, href, primary, secondary }: { title: string; href: string; primary: string; secondary: string }) {
   return <Link to={href} className="group rounded-xl border border-slate-200 bg-white p-4 transition hover:border-indigo-300 hover:shadow-sm"><div className="flex items-center justify-between"><p className="text-xs font-bold uppercase tracking-[0.16em] text-indigo-600">{title}</p><ArrowRight className="h-4 w-4 text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-indigo-500" /></div><p className="mt-3 text-lg font-extrabold text-slate-900">{primary}</p><p className="mt-1 text-xs text-slate-500">{secondary}</p></Link>;
+}
+
+function PerformanceRow({ label, value, detail, href }: { label: string; value: string; detail: string; href: string }) {
+  return <Link to={href} className="block rounded-lg border border-slate-100 bg-slate-50 p-3 transition hover:border-indigo-200 hover:bg-indigo-50/40"><div className="flex items-center justify-between"><span className="text-sm font-bold text-slate-900">{label}</span><span className="text-sm font-extrabold text-emerald-700">{value}</span></div><p className="mt-1 text-xs text-slate-500">{detail}</p></Link>;
 }
 
 function ExecutiveMetric({ label, value }: { label: string; value: string }) { return <div className="rounded-xl border border-slate-200 bg-white p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{label}</p><p className="mt-1 text-lg font-extrabold text-slate-900">{value}</p></div>; }
