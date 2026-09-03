@@ -61,6 +61,8 @@ export interface LeadClosingOffer {
 export interface Lead {
   id: string;
   workspaceId: string;
+  /** Additive business routing; legacy leads without this field remain WAAS by default. */
+  businessUnit?: "WAAS" | "AMWAY";
   companyName?: string;
   contactName: string;
   email: string;
@@ -479,6 +481,10 @@ export interface SystemSettings {
     whatsappNumber?: string;
     leadSlaHours: number;
     monthlyTarget: number;
+    /** Daily execution targets used by the Revenue Command Center. */
+    dailyOutreachTarget?: number;
+    waasMonthlyTarget?: number;
+    amwayMonthlyTarget?: number;
   };
   sales: {
     taxRate: number;

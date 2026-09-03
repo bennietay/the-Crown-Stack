@@ -12,6 +12,7 @@ import { Button } from "@/src/components/ui/button";
 import { Badge } from "@/src/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/src/components/ui/card";
 import { revenueByBusiness, summarizeRevenue } from "@/src/lib/revenue";
+import { activeRevenueEvents, goalPacing, isWaasLead, outreachCompleted, weightedOpportunityValue } from "@/src/lib/revenueExecution";
 import { businessTopology } from "@/src/store/businessStore";
 
 export function Dashboard() {
@@ -23,7 +24,7 @@ export function Dashboard() {
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
 
-  const wLeads = leads.filter(l => l.workspaceId === workspace?.id);
+  const wLeads = leads.filter(l => l.workspaceId === workspace?.id && isWaasLead(l));
   const wOpps = opportunities.filter(o => o.workspaceId === workspace?.id);
   const wProposals = proposals.filter(p => p.workspaceId === workspace?.id);
   const wTasks = tasks.filter(t => t.workspaceId === workspace?.id);
@@ -33,7 +34,7 @@ export function Dashboard() {
   const currency = settings?.business?.currency || 'USD';
   const target = settings?.business?.monthlyTarget || 100000;
   const now = new Date();
-  const workspaceRevenue = revenueEvents.filter(event => event.workspaceId === workspace?.id);
+  const workspaceRevenue = activeRevenueEvents(revenueEvents.filter(event => event.workspaceId === workspace?.id));
   const todayKey = now.toISOString().slice(0, 10); const monthKey = todayKey.slice(0, 7);
   const todayRevenue = summarizeRevenue(workspaceRevenue.filter(event => event.occurredAt.slice(0, 10) === todayKey));
   const monthRevenue = summarizeRevenue(workspaceRevenue.filter(event => event.occurredAt.slice(0, 7) === monthKey));
@@ -57,7 +58,7 @@ export function Dashboard() {
   });
   const hotLeads = wLeads.filter(l => actionableLeadStatuses.has(l.status) && (l.temperature === "hot" || (l.score || 0) >= 80));
   const activeOpps = wOpps.filter(o => !["won", "lost"].includes(o.stage.toLowerCase()));
-  const weightedPipeline = activeOpps.reduce((sum, opp) => sum + ((opp.estimatedValue || opp.expectedValue || 0) * (opp.stage === "Proposal sent" ? 0.7 : 0.4)), 0);
+  const weightedPipeline = activeOpps.reduce((sum, opp) => sum + weightedOpportunityValue(opp), 0);
   const expectedOTC = wProposals.filter(p => p.status === "sent").reduce((sum, p) => sum + p.totalOTC, 0);
   const expectedMRC = wProposals.filter(p => p.status === "sent").reduce((sum, p) => sum + p.totalMRC, 0);
   const wonThisMonthOTC = wProposals.filter(p => p.status === "accepted" && new Date(p.createdAt).getMonth() === now.getMonth()).reduce((sum, p) => sum + p.totalOTC, 0);
@@ -78,6 +79,9 @@ export function Dashboard() {
   const dueAmwayFollowUps = diamondFollowUps.filter(f => !f.completed && new Date(f.dueDate).getTime() <= now.getTime());
   const pipelineValue = Math.round(weightedPipeline + expectedOTC + expectedMRC + amwayProductProspects.length * 500 + amwayBusinessProspects.length * 3000);
   const targetGap = Math.max(0, target - monthRevenue.collected);
+  const activeGoalPacing = activeGoal ? goalPacing(activeGoal.targetAmount, monthRevenue.collected, activeGoal.startDate, activeGoal.endDate, now) : goalPacing(target, monthRevenue.collected, `${monthKey}-01`, `${monthKey}-31`, now);
+  const outreachTarget = settings?.business?.dailyOutreachTarget ?? 30;
+  const outreachDone = outreachCompleted(wLeads, todayKey);
   const actionItems = [
     ...hotLeads.slice(0, 20).map(l => `Contact hot WAAS lead: ${l.contactName}`),
     ...overdueTasks.slice(0, 10).map(t => `Complete overdue follow-up: ${t.contactName || t.title}`),
@@ -252,6 +256,12 @@ export function Dashboard() {
         <ExecutiveMetric label="WAAS MRR" value={`MYR ${wonThisMonthMRC.toLocaleString()}`} />
         <ExecutiveMetric label="Amway sales" value={`MYR ${amwayRevenue.filter(e => e.status === "collected").reduce((s,e) => s + (e.grossRevenue || 0), 0).toLocaleString()}`} />
         <ExecutiveMetric label="Follow-ups due" value={(overdueTasks.length + dueAmwayFollowUps.length).toLocaleString()} />
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm">Target pacing</CardTitle></CardHeader><CardContent><div className="flex items-end justify-between"><span className="text-2xl font-extrabold text-slate-900">{Math.round(activeGoalPacing.pace * 100)}%</span><span className={`text-xs font-bold ${activeGoalPacing.onTrack ? "text-emerald-600" : "text-amber-600"}`}>{activeGoalPacing.onTrack ? "On track" : "Recovery needed"}</span></div><div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full ${activeGoalPacing.onTrack ? "bg-emerald-500" : "bg-amber-500"}`} style={{ width: `${Math.min(100, activeGoalPacing.pace * 100)}%` }} /></div><p className="mt-2 text-xs text-slate-500">MYR {Math.round(activeGoalPacing.collected).toLocaleString()} collected · MYR {Math.round(activeGoalPacing.gap).toLocaleString()} gap</p></CardContent></Card>
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm">Today's outreach</CardTitle></CardHeader><CardContent><div className="flex items-end justify-between"><span className="text-2xl font-extrabold text-slate-900">{outreachDone}/{outreachTarget}</span><span className="text-xs font-bold text-indigo-600">{Math.round((outreachDone / Math.max(1, outreachTarget)) * 100)}%</span></div><div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-indigo-500" style={{ width: `${Math.min(100, outreachDone / Math.max(1, outreachTarget) * 100)}%` }} /></div><p className="mt-2 text-xs text-slate-500">Messages recorded today across WAAS leads</p></CardContent></Card>
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm">Next 7 days</CardTitle></CardHeader><CardContent><p className="text-2xl font-extrabold text-slate-900">MYR {Math.round(monthRevenue.expected + pipelineValue * 0.25).toLocaleString()}</p><p className="mt-1 text-xs text-slate-500">Expected from booked revenue and 25% of active pipeline</p><Link to="/pipeline" className="mt-3 inline-flex text-xs font-bold text-indigo-600">Work pipeline <ArrowRight className="ml-1 h-3.5 w-3.5" /></Link></CardContent></Card>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
