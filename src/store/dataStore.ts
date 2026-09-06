@@ -43,8 +43,10 @@ interface DataState {
   addWaasPlan: (value: Omit<WaasPlan, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>; updateWaasPlan: (id: string, updates: Partial<WaasPlan>) => Promise<void>;
   addWaasTemplate: (value: Omit<WaasTemplate, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>; updateWaasTemplate: (id: string, updates: Partial<WaasTemplate>) => Promise<void>;
   addWaasOrder: (value: Omit<WaasOrder, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>; updateWaasOrder: (id: string, updates: Partial<WaasOrder>) => Promise<void>;
+  addWaasOnboarding: (value: Omit<WaasOnboarding, 'id' | 'updatedAt'>) => Promise<void>; updateWaasOnboarding: (id: string, updates: Partial<WaasOnboarding>) => Promise<void>;
   addWaasWebsite: (value: Omit<WaasWebsite, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>; updateWaasWebsite: (id: string, updates: Partial<WaasWebsite>) => Promise<void>;
-  addWaasDeployment: (value: Omit<WaasDeployment, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>; updateWaasDeployment: (id: string, updates: Partial<WaasDeployment>) => Promise<void>;
+  addWaasDeployment: (value: Omit<WaasDeployment, 'id' | 'createdAt' | 'updatedAt'>) => Promise<string>; updateWaasDeployment: (id: string, updates: Partial<WaasDeployment>) => Promise<void>;
+  addWaasDeploymentStep: (value: WaasDeploymentStep) => Promise<void>; updateWaasDeploymentStep: (id: string, updates: Partial<WaasDeploymentStep>) => Promise<void>;
   addWaasTicket: (value: Omit<WaasSupportTicket, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>; updateWaasTicket: (id: string, updates: Partial<WaasSupportTicket>) => Promise<void>;
 }
 
@@ -128,10 +130,14 @@ export const useDataStore = create<DataState>((set, get) => ({
   updateWaasTemplate: async (id, updates) => { const ws = get().activeWorkspaceId; if (!ws) throw new Error('Workspace is not selected'); await writeRecord(ws, 'waas_templates', id, { ...(get().waasTemplates.find(row => row.id === id) || {}), ...updates, id, updatedAt: now() }); },
   addWaasOrder: async (value) => { const id = makeId('waas-order'); const timestamp = now(); await writeRecord(value.workspaceId, 'waas_orders', id, { ...value, id, createdAt: timestamp, updatedAt: timestamp }); },
   updateWaasOrder: async (id, updates) => { const ws = get().activeWorkspaceId; if (!ws) throw new Error('Workspace is not selected'); await writeRecord(ws, 'waas_orders', id, { ...(get().waasOrders.find(row => row.id === id) || {}), ...updates, id, updatedAt: now() }); },
+  addWaasOnboarding: async (value) => { const id = makeId('waas-onboarding'); await writeRecord(value.workspaceId, 'waas_onboardings', id, { ...value, id, updatedAt: now() }); },
+  updateWaasOnboarding: async (id, updates) => { const ws = get().activeWorkspaceId; if (!ws) throw new Error('Workspace is not selected'); await writeRecord(ws, 'waas_onboardings', id, { ...(get().waasOnboardings.find(row => row.id === id) || {}), ...updates, id, updatedAt: now() }); },
   addWaasWebsite: async (value) => { const id = makeId('waas-site'); const timestamp = now(); await writeRecord(value.workspaceId, 'waas_websites', id, { ...value, id, createdAt: timestamp, updatedAt: timestamp }); },
   updateWaasWebsite: async (id, updates) => { const ws = get().activeWorkspaceId; if (!ws) throw new Error('Workspace is not selected'); await writeRecord(ws, 'waas_websites', id, { ...(get().waasWebsites.find(row => row.id === id) || {}), ...updates, id, updatedAt: now() }); },
-  addWaasDeployment: async (value) => { const id = makeId('waas-deployment'); const timestamp = now(); await writeRecord(value.workspaceId, 'waas_deployments', id, { ...value, id, createdAt: timestamp, updatedAt: timestamp }); },
+  addWaasDeployment: async (value) => { const id = makeId('waas-deployment'); const timestamp = now(); await writeRecord(value.workspaceId, 'waas_deployments', id, { ...value, id, createdAt: timestamp, updatedAt: timestamp }); return id; },
   updateWaasDeployment: async (id, updates) => { const ws = get().activeWorkspaceId; if (!ws) throw new Error('Workspace is not selected'); await writeRecord(ws, 'waas_deployments', id, { ...(get().waasDeployments.find(row => row.id === id) || {}), ...updates, id, updatedAt: now() }); },
+  addWaasDeploymentStep: async (value) => { await writeRecord(value.workspaceId, 'waas_deployment_steps', value.id, { ...value }); },
+  updateWaasDeploymentStep: async (id, updates) => { const ws = get().activeWorkspaceId; if (!ws) throw new Error('Workspace is not selected'); await writeRecord(ws, 'waas_deployment_steps', id, { ...(get().waasDeploymentSteps.find(row => row.id === id) || {}), ...updates, id }); },
   addWaasTicket: async (value) => { const id = makeId('waas-ticket'); const timestamp = now(); await writeRecord(value.workspaceId, 'waas_support_tickets', id, { ...value, id, createdAt: timestamp, updatedAt: timestamp }); },
   updateWaasTicket: async (id, updates) => { const ws = get().activeWorkspaceId; if (!ws) throw new Error('Workspace is not selected'); await writeRecord(ws, 'waas_support_tickets', id, { ...(get().waasSupportTickets.find(row => row.id === id) || {}), ...updates, id, updatedAt: now() }); },
 }));
