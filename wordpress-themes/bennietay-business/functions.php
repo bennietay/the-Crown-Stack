@@ -1,6 +1,6 @@
 <?php
 if (!defined('ABSPATH')) exit;
-function bennietay_business_assets(){wp_enqueue_style('bennietay-business',get_stylesheet_uri(),[], '1.1.0');wp_enqueue_script('bennietay-business',get_template_directory_uri().'/assets/interactions.js',[], '1.1.0', true);}
+function bennietay_business_assets(){wp_enqueue_style('bennietay-business',get_stylesheet_uri(),[], '1.2.0');wp_enqueue_style('bennietay-business-enhancements',get_template_directory_uri().'/assets/enhancements.css',['bennietay-business'],'1.2.0');wp_enqueue_script('bennietay-business',get_template_directory_uri().'/assets/interactions.js',[], '1.2.0', true);}
 add_action('wp_enqueue_scripts','bennietay_business_assets');
 add_theme_support('title-tag'); add_theme_support('post-thumbnails'); add_theme_support('custom-logo'); register_nav_menus(['primary'=>'Primary navigation']);
 

@@ -62,6 +62,20 @@ describe("WAAS architecture", () => {
     assert.match(launch, /mailto:/);
   });
 
+  it("deployable themes include conversion sections and interactive assets", () => {
+    const launch = fs.readFileSync(path.join(process.cwd(), "wordpress-themes/bennietay-launch/index.php"), "utf8");
+    const business = fs.readFileSync(path.join(process.cwd(), "wordpress-themes/bennietay-business/front-page.php"), "utf8");
+    for (const section of ["services", "about", "reviews", "faq", "contact"]) assert.match(launch, new RegExp(`id=\\"${section}\\"`));
+    assert.match(launch, /data-bt-slider/);
+    assert.match(launch, /data-bt-counter/);
+    const businessFunctions = fs.readFileSync(path.join(process.cwd(), "wordpress-themes/bennietay-business/functions.php"), "utf8");
+    assert.match(businessFunctions, /'services'/);
+    assert.match(businessFunctions, /'portfolio'/);
+    assert.match(business, /data-bt-slider/);
+    assert.ok(fs.existsSync(path.join(process.cwd(), "wordpress-themes/bennietay-launch/assets/enhancements.css")));
+    assert.ok(fs.existsSync(path.join(process.cwd(), "wordpress-themes/bennietay-business/assets/enhancements.css")));
+  });
+
   it("queued deployments have a protected cron runner", () => {
     const server = fs.readFileSync(path.join(process.cwd(), "server.ts"), "utf8");
     const vercel = fs.readFileSync(path.join(process.cwd(), "vercel.json"), "utf8");
