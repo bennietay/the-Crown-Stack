@@ -44,7 +44,7 @@ const bennieNavigation = [
     { name: "Support Tickets", href: "/tickets", icon: LifeBuoy },
   ]},
   { section: "Businesses", items: [
-    { name: "WAAS", href: "/leads", icon: BriefcaseBusiness },
+    { name: "WAAS", href: "/waas", icon: BriefcaseBusiness },
     { name: "Amway", href: "/diamond", icon: Gem },
   ]},
   { section: "Operations", items: [
@@ -72,7 +72,7 @@ export function Sidebar({ onClose, className }: SidebarProps) {
   const navigationGroups = bennieNavigation;
   const visibleNavigationGroups = activeBusiness === "all"
     ? navigationGroups
-    : navigationGroups.filter(group => ["Operations", "System"].includes(group.section));
+    : navigationGroups.filter(group => ["Operations", "System", activeBusiness === "waas" ? "Businesses" : "Businesses"].includes(group.section));
 
   const activeRole = workspace ? workspaceRoles[workspace.id] || user?.role || "customer" : user?.role || "customer";
   const activeBusinessDefinition = businessContexts.find(context => context.id === activeBusiness) || businessContexts[0];
@@ -90,13 +90,13 @@ export function Sidebar({ onClose, className }: SidebarProps) {
       return true;
     }
     if (activeRole === "sales") {
-      return ["/", "/queue", "/money-tasks", "/revenue", "/goals", "/analytics", "/brief", "/leads", "/pipeline", "/proposals", "/products", "/customers", "/diamond", "/notifications"].includes(href);
+      return ["/", "/queue", "/money-tasks", "/revenue", "/goals", "/analytics", "/brief", "/leads", "/pipeline", "/proposals", "/products", "/customers", "/diamond", "/waas", "/notifications"].includes(href);
     }
     if (activeRole === "operations") {
-      return ["/", "/queue", "/money-tasks", "/revenue", "/goals", "/analytics", "/brief", "/products", "/customers", "/tickets", "/diamond", "/notifications"].includes(href);
+      return ["/", "/queue", "/money-tasks", "/revenue", "/goals", "/analytics", "/brief", "/products", "/customers", "/tickets", "/diamond", "/waas", "/notifications"].includes(href);
     }
     if (activeRole === "support") {
-      return ["/", "/customers", "/tickets", "/diamond", "/notifications"].includes(href);
+      return ["/", "/customers", "/tickets", "/diamond", "/waas", "/notifications"].includes(href);
     }
     if (activeRole === "customer") {
       return false;

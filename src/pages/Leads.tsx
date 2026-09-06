@@ -35,7 +35,7 @@ import { useSettingsStore } from "@/src/store/settingsStore";
 import { v4 as uuidv4 } from "uuid";
 
 export function Leads() {
-  const { leads, tasks, products, addLead, addTask, updateLead, deleteLead, addOpportunity, addProposal } = useDataStore();
+  const { leads, tasks, products, addLead, addTask, updateLead, deleteLead, addOpportunity, addProposal, addActivity } = useDataStore();
   const workspace = useAuthStore(state => state.workspace);
   const settings = useSettingsStore(state => state.settings);
   const currency = settings.business.currency;
@@ -200,14 +200,32 @@ export function Leads() {
     return { text: `In SLA (<${settings.business.leadSlaHours}h)`, color: "text-emerald-700 bg-emerald-50 border-emerald-200 font-bold" };
   };
 
-  const openWhatsApp = (phone: string, name: string) => {
+  const outreachMessage = (lead: Lead) => `Hi ${lead.contactName}, Bennie here from Bennie Studio. I noticed ${lead.companyName || "your business"} may be able to turn more website visitors into enquiries. Would a quick 10-minute review be useful?`;
+
+  const recordOutreach = async (lead: Lead, channel: "email" | "whatsapp") => {
+    const timestamp = new Date().toISOString();
+    await updateLead(lead.id, { lastContactedAt: timestamp, messagesSentCount: (lead.messagesSentCount || 0) + 1, status: lead.status === "new" ? "contacted" : lead.status });
+    if (workspace) await addActivity({ workspaceId: workspace.id, actor: "USER", businessUnit: "WAAS", action: "outreach_sent", entityType: "lead", entityId: lead.id, result: "success", metadata: { channel, message: outreachMessage(lead) } });
+  };
+
+  const openWhatsApp = async (lead: Lead) => {
+    const phone = lead.phone || "";
+    const name = lead.contactName;
     const cleanPhone = phone.replace(/[^0-9]/g, "");
     if (!cleanPhone) {
       alert("No valid phone number.");
       return;
     }
-    const msg = encodeURIComponent(`Hi ${name}, Bennie here from Bennie Studio. Thanks for reaching out!`);
+    const msg = encodeURIComponent(outreachMessage(lead));
     window.open(`https://wa.me/${cleanPhone}?text=${msg}`, "_blank");
+    await recordOutreach(lead, "whatsapp");
+  };
+
+  const openEmail = async (lead: Lead) => {
+    const subject = encodeURIComponent(`A quick idea for ${lead.companyName || "your website"}`);
+    const body = encodeURIComponent(outreachMessage(lead));
+    window.location.href = `mailto:${lead.email}?subject=${subject}&body=${body}`;
+    await recordOutreach(lead, "email");
   };
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
@@ -537,6 +555,8 @@ export function Leads() {
                       </td>
                       <td className="px-6 py-3 text-right">
                         <div className="flex items-center justify-end space-x-1" onClick={e => e.stopPropagation()}>
+                          <Button variant="ghost" size="sm" title="Open email outreach" onClick={() => void openEmail(lead)}><Mail className="w-3.5 h-3.5 text-indigo-600" /></Button>
+                          <Button variant="ghost" size="sm" title="Open WhatsApp outreach" onClick={() => void openWhatsApp(lead)}><MessageCircle className="w-3.5 h-3.5 text-emerald-600" /></Button>
                           <Button variant="ghost" size="sm" title="Edit Lead" onClick={() => openEditModal(lead)}>
                             <Pencil className="w-3.5 h-3.5 text-slate-600" />
                           </Button>
@@ -942,10 +962,10 @@ export function Leads() {
                 <div className="space-y-6">
                   {/* Quick Action Buttons */}
                   <div className="grid grid-cols-3 gap-3">
-                    <Button className="bg-[#25D366] hover:bg-[#20bd5a] text-white" onClick={() => openWhatsApp(selectedLead.phone || "", selectedLead.contactName)}>
+                    <Button className="bg-[#25D366] hover:bg-[#20bd5a] text-white" onClick={() => void openWhatsApp(selectedLead)}>
                       <MessageCircle className="w-4 h-4 mr-2" /> WhatsApp Response
                     </Button>
-                    <Button variant="outline" onClick={() => window.location.href = `mailto:${selectedLead.email}`}>
+                    <Button variant="outline" onClick={() => void openEmail(selectedLead)}>
                       <Mail className="w-4 h-4 mr-2" /> Email Outreach
                     </Button>
                     <Button variant="outline" onClick={() => setActiveDrawerTab('closing')}>

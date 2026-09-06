@@ -12,6 +12,9 @@ export const DEFAULT_BENNIE_SETTINGS: SystemSettings = {
     whatsappNumber: '',
     leadSlaHours: 4,
     monthlyTarget: 15000,
+    dailyOutreachTarget: 30,
+    waasMonthlyTarget: 10000,
+    amwayMonthlyTarget: 5000,
   },
   sales: {
     taxRate: 9,
