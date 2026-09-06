@@ -94,6 +94,13 @@ The same server-to-server key protects `POST /api/integrations/waas/onboarding`,
 `POST /api/integrations/waas/tickets`. These are the intended storefront and
 customer-portal contracts for onboarding, status polling, and support.
 
+Hostinger provisioning is implemented behind `src/server/hostingerProvider.ts`.
+Set `HOSTINGER_API_TOKEN` to enable the real provider; also configure
+`HOSTINGER_ORDER_ID` (and optionally `HOSTINGER_DATACENTER_CODE`) because the
+Hostinger website-create API requires a hosting order and a customer domain.
+Without the token, deployments remain in safe mock mode. Real provisioning still
+ends at `review_required` and never publishes automatically.
+
 The initial WordPress connector contract lives in
 `wordpress-plugin/bennietay-managed-connector/`. Define
 `BENNIETAY_CONNECTOR_SECRET` in the WordPress installation and send an

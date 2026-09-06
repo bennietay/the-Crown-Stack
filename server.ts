@@ -409,7 +409,7 @@ app.post("/api/waas/deployments/:id/run", authenticateUser, requireWorkspace(), 
     for (const [index, name] of names.entries()) {
       const stepId = `${deploymentId}-${name}`; const step = { id: stepId, workspaceId, deploymentId, name, status: "running", startedAt: new Date().toISOString(), retryCount: 0, logs: [`Started ${name}`] };
       await upsertWaasRecord(workspaceId, "waas_deployment_steps", stepId, step);
-      if (name === "provision_site") hosting = await provider.createWebsite({ customerName: order.customerName });
+      if (name === "provision_site") hosting = await provider.createWebsite({ customerName: order.customerName, domain: String((onboardingRow.data as any).website?.domain || "").trim() || undefined });
       const completed = { ...step, status: "complete", completedAt: new Date().toISOString(), logs: [...step.logs, `Completed ${name}`] };
       await upsertWaasRecord(workspaceId, "waas_deployment_steps", stepId, completed);
       if (index < names.length - 1) await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, status: "running", provider: "mock", currentStep: names[index + 1], startedAt: deployment.startedAt || now, updatedAt: new Date().toISOString() });
