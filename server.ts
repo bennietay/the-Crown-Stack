@@ -10,7 +10,7 @@ import { authenticateUser, AuthenticatedRequest, logAuditEvent, requireRole, req
 import { createSupabaseRequestClient, hasSupabaseServiceRole, supabaseServer, supabaseServerUrl, supabaseWorkspaceId } from "./src/server/supabase";
 import { decryptCredential, encryptCredential, EncryptedPayload } from "./src/server/credentialCrypto";
 import { revenueByBusiness, summarizeRevenue } from "./src/lib/revenue";
-import { getHostingProvider } from "./src/server/hostingerProvider";
+import { getHostingProvider, getHostingProviderKind } from "./src/server/hostingerProvider";
 
 const isProduction = process.env.NODE_ENV === "production";
 const appMode = process.env.APP_MODE || (isProduction ? "" : "demo");
@@ -374,6 +374,32 @@ app.get("/api/integrations/waas/orders/:id/status", async (req, res) => {
   return res.json({ order, website: websiteRow.data?.data || null });
 });
 
+// Create a real Stripe Checkout session for a WAAS order. Orders remain
+// pending until Stripe confirms payment through the signed webhook below.
+app.post("/api/waas/orders/:id/checkout", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "sales"]), acceptanceLimiter, async (req: AuthenticatedRequest, res) => {
+  if (!stripe) return res.status(503).json({ error: "Online payment is not configured" });
+  try {
+    const { data: orderRow, error: orderError } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: req.workspaceId, collection_name: "waas_orders", record_id: req.params.id, is_soft_deleted: false }).maybeSingle();
+    if (orderError) throw orderError;
+    if (!orderRow?.data) return res.status(404).json({ error: "WAAS order not found" });
+    const order = orderRow.data as any;
+    if (order.paymentStatus === "paid" || ["paid", "awaiting_onboarding", "ready_for_deployment", "deploying", "review_required", "live"].includes(order.status)) return res.status(409).json({ error: "This order is already paid" });
+    if (!order.planId) return res.status(409).json({ error: "Select a WAAS plan before requesting payment" });
+    const { data: planRow } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: req.workspaceId, collection_name: "waas_plans", record_id: order.planId, is_soft_deleted: false }).maybeSingle();
+    const plan = planRow?.data as any;
+    if (!plan || plan.active === false) return res.status(409).json({ error: "The selected WAAS plan is unavailable" });
+    const currency = String(plan.currency || "MYR").toLowerCase();
+    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [];
+    if (Number(plan.setupFee) > 0) lineItems.push({ price_data: { currency, product_data: { name: `${plan.name} setup` }, unit_amount: Math.round(Number(plan.setupFee) * 100) }, quantity: 1 });
+    if (Number(plan.recurringFee) > 0) lineItems.push({ price_data: { currency, product_data: { name: `${plan.name} care plan` }, unit_amount: Math.round(Number(plan.recurringFee) * 100), recurring: { interval: plan.billingInterval === "year" ? "year" : "month" } }, quantity: 1 });
+    if (!lineItems.length) return res.status(409).json({ error: "The selected plan has no billable amount" });
+    const metadata = { workspaceId: req.workspaceId!, waasOrderId: order.id, planId: plan.id };
+    const session = await stripe.checkout.sessions.create({ mode: Number(plan.recurringFee) > 0 ? "subscription" : "payment", line_items: lineItems, customer_email: order.customerEmail || undefined, metadata, subscription_data: Number(plan.recurringFee) > 0 ? { metadata } : undefined, success_url: `${process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"}/waas?payment=success&order=${encodeURIComponent(order.id)}`, cancel_url: `${process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"}/waas?payment=cancelled&order=${encodeURIComponent(order.id)}` });
+    await upsertWaasRecord(req.workspaceId!, "waas_orders", order.id, { ...order, paymentStatus: "pending", checkoutSessionId: session.id, updatedAt: new Date().toISOString() });
+    return res.json({ checkoutUrl: session.url, sessionId: session.id });
+  } catch (error) { console.error("WAAS checkout creation failed", error); return res.status(503).json({ error: "WAAS checkout could not be created" }); }
+});
+
 app.post("/api/integrations/waas/tickets", async (req, res) => {
   if (!validWaasKey(req)) return res.status(401).json({ error: "Unauthorized" });
   try { const parsed = waasTicketSchema.parse(req.body); const id = parsed.id || `portal-ticket-${crypto.randomUUID()}`; const now = new Date().toISOString(); const existing = await supabaseServer.from("bos_records").select("data").match({ workspace_id: supabaseWorkspaceId, collection_name: "waas_support_tickets", record_id: id, is_soft_deleted: false }).maybeSingle(); if (existing.data?.data) return res.json({ success: true, duplicate: true, ticket: existing.data.data }); const ticket = { ...parsed, id, workspaceId: supabaseWorkspaceId, ticketNumber: `WAAS-${Date.now().toString().slice(-6)}`, source: "customer_portal", status: "new", createdAt: now, updatedAt: now }; await upsertWaasRecord(supabaseWorkspaceId, "waas_support_tickets", id, ticket); return res.status(201).json({ success: true, ticket }); } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid support ticket", details: error.issues }); return res.status(503).json({ error: "Support ticket could not be created" }); }
@@ -392,8 +418,9 @@ app.post("/api/waas/orders/:id/deploy", authenticateUser, requireWorkspace(), re
 });
 
 app.post("/api/waas/deployments/:id/run", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations"]), async (req: AuthenticatedRequest, res) => {
+  let deploymentId = req.params.id;
   try {
-    const workspaceId = req.workspaceId!; const deploymentId = req.params.id;
+    const workspaceId = req.workspaceId!;
     const { data: deploymentRow, error: deploymentError } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "waas_deployments", record_id: deploymentId, is_soft_deleted: false }).maybeSingle(); if (deploymentError) throw deploymentError; if (!deploymentRow?.data) return res.status(404).json({ error: "Deployment not found" });
     const deployment = deploymentRow.data as any; if (["complete", "cancelled"].includes(deployment.status)) return res.status(409).json({ error: "Deployment is not runnable in its current state" });
     const { data: orderRow } = deployment.orderId ? await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "waas_orders", record_id: deployment.orderId, is_soft_deleted: false }).maybeSingle() : { data: null } as any; const order = orderRow?.data as any;
@@ -404,20 +431,21 @@ app.post("/api/waas/deployments/:id/run", authenticateUser, requireWorkspace(), 
       await upsertWaasRecord(workspaceId, "waas_orders", deployment.orderId, { ...order, status: "awaiting_onboarding", updatedAt: new Date().toISOString() });
       return res.status(409).json({ error: "Completed onboarding is required before deployment" });
     }
-    const names = ["validate_order", "validate_onboarding", "provision_site", "install_wordpress", "apply_template", "run_qa", "review_gate"]; const now = new Date().toISOString(); await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, status: "running", provider: "mock", startedAt: deployment.startedAt || now, currentStep: names[0], updatedAt: now });
+    const names = ["validate_order", "validate_onboarding", "validate_domain", "provision_hosting", "install_wordpress", "deploy_managed_connector", "apply_template", "configure_lead_capture", "configure_domain_ssl", "run_qa", "review_gate"]; const now = new Date().toISOString(); const providerKind = getHostingProviderKind(); await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, status: "running", provider: providerKind, startedAt: deployment.startedAt || now, currentStep: names[0], updatedAt: now });
     const provider = getHostingProvider(); let hosting: { installationId: string; temporaryUrl: string } | null = null;
     for (const [index, name] of names.entries()) {
       const stepId = `${deploymentId}-${name}`; const step = { id: stepId, workspaceId, deploymentId, name, status: "running", startedAt: new Date().toISOString(), retryCount: 0, logs: [`Started ${name}`] };
       await upsertWaasRecord(workspaceId, "waas_deployment_steps", stepId, step);
-      if (name === "provision_site") hosting = await provider.createWebsite({ customerName: order.customerName, domain: String((onboardingRow.data as any).website?.domain || "").trim() || undefined });
+      if (name === "validate_domain" && !String((onboardingRow.data as any).website?.domain || "").trim()) throw new Error("A domain is required before fulfilment can start");
+      if (name === "provision_hosting") hosting = await provider.createWebsite({ customerName: order.customerName, domain: String((onboardingRow.data as any).website?.domain || "").trim() || undefined });
       const completed = { ...step, status: "complete", completedAt: new Date().toISOString(), logs: [...step.logs, `Completed ${name}`] };
       await upsertWaasRecord(workspaceId, "waas_deployment_steps", stepId, completed);
-      if (index < names.length - 1) await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, status: "running", provider: "mock", currentStep: names[index + 1], startedAt: deployment.startedAt || now, updatedAt: new Date().toISOString() });
+      if (index < names.length - 1) await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, status: "running", provider: providerKind, currentStep: names[index + 1], startedAt: deployment.startedAt || now, updatedAt: new Date().toISOString() });
     }
     const websiteId = deployment.websiteId || `waas-site-${crypto.randomUUID()}`; const website = { id: websiteId, workspaceId, orderId: deployment.orderId, customerId: order.customerId, productType: order.productType, niche: order.niche, style: order.style, templateId: order.templateId, status: "review_required", deploymentStatus: "review_required", wordpressInstallationId: hosting?.installationId, temporaryUrl: hosting?.temporaryUrl, lastHealthCheck: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; await upsertWaasRecord(workspaceId, "waas_websites", websiteId, website);
-    await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, status: "review_required", currentStep: "review_gate", websiteId, completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); await upsertWaasRecord(workspaceId, "waas_orders", deployment.orderId, { ...order, websiteId, deploymentId, status: "review_required", updatedAt: new Date().toISOString() });
+    await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, status: "review_required", provider: providerKind, currentStep: "review_gate", websiteId, completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); await upsertWaasRecord(workspaceId, "waas_orders", deployment.orderId, { ...order, websiteId, deploymentId, status: "review_required", updatedAt: new Date().toISOString() });
     return res.json({ success: true, deploymentId, websiteId, status: "review_required", previewUrl: hosting?.temporaryUrl, requiresApproval: true });
-  } catch (error) { console.error("WAAS deployment run failed", error); return res.status(503).json({ error: "WAAS deployment job failed" }); }
+  } catch (error) { console.error("WAAS deployment run failed", error); if (req.workspaceId && deploymentId) { try { await upsertWaasRecord(req.workspaceId, "waas_deployments", deploymentId, { status: "failed", errorMessage: error instanceof Error ? error.message : "Deployment step failed", updatedAt: new Date().toISOString() }); } catch (persistError) { console.error("Could not persist WAAS deployment failure", persistError); } } return res.status(503).json({ error: error instanceof Error ? error.message : "WAAS deployment job failed" }); }
 });
 
 app.post("/api/webhooks/stripe", express.raw({ type: "application/json", limit: "1mb" }), async (req, res) => {
@@ -430,19 +458,21 @@ app.post("/api/webhooks/stripe", express.raw({ type: "application/json", limit: 
   try {
     const object: any = event.data.object; let metadata: any = object.metadata || {};
     if (event.type === "invoice.payment_succeeded") metadata = object.parent?.subscription_details?.metadata || object.subscription_details?.metadata || object.metadata || {};
-    const workspaceId = String(metadata.workspaceId || ""); const proposalId = String(metadata.proposalId || "");
-    if (workspaceId && proposalId && workspaceId === supabaseWorkspaceId && (event.type === "checkout.session.completed" || event.type === "invoice.payment_succeeded")) {
+    const workspaceId = String(metadata.workspaceId || ""); const proposalId = String(metadata.proposalId || ""); const waasOrderId = String(metadata.waasOrderId || "");
+    if (workspaceId && (proposalId || waasOrderId) && workspaceId === supabaseWorkspaceId && (event.type === "checkout.session.completed" || event.type === "invoice.payment_succeeded")) {
       const isCheckoutPayment = event.type === "checkout.session.completed" && object.mode === "payment";
       const isSubscriptionInvoice = event.type === "invoice.payment_succeeded";
       const amountMinor = Number(isSubscriptionInvoice ? object.amount_paid : object.amount_total || 0);
       const currency = String(object.currency || "myr").toUpperCase(); const timestamp = new Date((Number(object.created || event.created) || Math.floor(Date.now() / 1000)) * 1000).toISOString();
-      const { data: proposalRow } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "proposals", record_id: proposalId, is_soft_deleted: false }).maybeSingle();
-      const writes: any[] = [{ workspace_id: workspaceId, collection_name: "stripe_events", record_id: event.id, data: { id: event.id, type: event.type, proposalId, amount: amountMinor / 100, currency, processedAt: new Date().toISOString() }, is_soft_deleted: false, updated_at: new Date().toISOString() }];
+      const { data: proposalRow } = proposalId ? await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "proposals", record_id: proposalId, is_soft_deleted: false }).maybeSingle() : { data: null } as any;
+      const { data: waasOrderRow } = waasOrderId ? await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "waas_orders", record_id: waasOrderId, is_soft_deleted: false }).maybeSingle() : { data: null } as any;
+      const writes: any[] = [{ workspace_id: workspaceId, collection_name: "stripe_events", record_id: event.id, data: { id: event.id, type: event.type, proposalId: proposalId || undefined, waasOrderId: waasOrderId || undefined, amount: amountMinor / 100, currency, processedAt: new Date().toISOString() }, is_soft_deleted: false, updated_at: new Date().toISOString() }];
       if ((isCheckoutPayment || isSubscriptionInvoice) && amountMinor > 0) {
         const revenueId = `stripe-${event.id}`;
-        writes.push({ workspace_id: workspaceId, collection_name: "revenue_events", record_id: revenueId, data: { id: revenueId, workspaceId, businessUnit: "WAAS", sourceType: isSubscriptionInvoice ? "subscription" : "sale", externalId: object.id, customerName: object.customer_name || object.customer_details?.name || undefined, currency, grossRevenue: amountMinor / 100, costs: 0, fees: 0, status: "collected", occurredAt: timestamp, collectedAt: timestamp, metadata: { costsKnown: false, stripeEventId: event.id, proposalId }, createdAt: timestamp }, is_soft_deleted: false, updated_at: timestamp });
+        writes.push({ workspace_id: workspaceId, collection_name: "revenue_events", record_id: revenueId, data: { id: revenueId, workspaceId, businessUnit: "WAAS", sourceType: isSubscriptionInvoice ? "subscription" : "sale", externalId: object.id, customerName: object.customer_name || object.customer_details?.name || undefined, currency, grossRevenue: amountMinor / 100, costs: 0, fees: 0, status: "collected", occurredAt: timestamp, collectedAt: timestamp, metadata: { costsKnown: false, stripeEventId: event.id, proposalId: proposalId || undefined, waasOrderId: waasOrderId || undefined }, createdAt: timestamp }, is_soft_deleted: false, updated_at: timestamp });
       }
       if (proposalRow?.data) writes.push({ workspace_id: workspaceId, collection_name: "proposals", record_id: proposalId, data: { ...(proposalRow.data as any), status: "Paid", paymentStatus: "paid", stripeCustomerId: object.customer || undefined, stripeSubscriptionId: object.subscription || object.parent?.subscription_details?.subscription || undefined, paidAt: timestamp, updatedAt: timestamp }, is_soft_deleted: false, updated_at: timestamp });
+      if (waasOrderRow?.data) writes.push({ workspace_id: workspaceId, collection_name: "waas_orders", record_id: waasOrderId, data: { ...(waasOrderRow.data as any), status: "paid", paymentStatus: "paid", subscriptionId: object.subscription || object.parent?.subscription_details?.subscription || undefined, paidAt: timestamp, updatedAt: timestamp }, is_soft_deleted: false, updated_at: timestamp });
       const { error } = await supabaseServer.from("bos_records").upsert(writes, { onConflict: "workspace_id,collection_name,record_id" }); if (error) throw error;
     }
     return res.json({ received: true });

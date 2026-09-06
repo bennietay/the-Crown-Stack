@@ -42,3 +42,7 @@ class HostingerApiProvider implements HostingProvider {
 export function getHostingProvider(): HostingProvider {
   return process.env.HOSTINGER_API_TOKEN ? new HostingerApiProvider() : new MockHostingerProvider();
 }
+
+export function getHostingProviderKind(): "hostinger" | "mock" {
+  return process.env.HOSTINGER_API_TOKEN ? "hostinger" : "mock";
+}
