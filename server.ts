@@ -10,6 +10,7 @@ import { authenticateUser, AuthenticatedRequest, logAuditEvent, requireRole, req
 import { createSupabaseRequestClient, hasSupabaseServiceRole, supabaseServer, supabaseServerUrl, supabaseWorkspaceId } from "./src/server/supabase";
 import { decryptCredential, encryptCredential, EncryptedPayload } from "./src/server/credentialCrypto";
 import { revenueByBusiness, summarizeRevenue } from "./src/lib/revenue";
+import { getHostingProvider } from "./src/server/hostingerProvider";
 
 const isProduction = process.env.NODE_ENV === "production";
 const appMode = process.env.APP_MODE || (isProduction ? "" : "demo");
@@ -329,6 +330,44 @@ const rateKey = (req: express.Request) => ipKeyGenerator(req.ip || req.socket.re
 app.use("/api/", rateLimit({ windowMs: 15 * 60 * 1000, max: 120, keyGenerator: rateKey, message: { error: "Too many requests. Please try again later." } }));
 const captureLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 15, keyGenerator: rateKey, message: { error: "Too many enquiry attempts. Please try again later." } });
 const acceptanceLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, keyGenerator: rateKey, message: { error: "Too many acceptance attempts. Please try again later." } });
+
+const waasOrderSchema = z.object({
+  id: z.string().trim().max(120).optional(), customerId: z.string().trim().max(120).optional(), customerName: z.string().trim().min(2).max(160), customerEmail: z.string().email().max(254).optional(), productType: z.enum(["launch", "business"]), planId: z.string().trim().max(120).optional(), niche: z.string().trim().max(100).optional(), style: z.enum(["modern", "bold", "premium"]).optional(), paymentStatus: z.enum(["pending", "paid", "failed", "refunded"]).default("pending"), externalId: z.string().trim().max(200).optional(),
+});
+
+async function upsertWaasRecord(workspaceId: string, collectionName: string, id: string, data: Record<string, unknown>) {
+  const timestamp = new Date().toISOString();
+  const { error } = await supabaseServer.from("bos_records").upsert({ workspace_id: workspaceId, collection_name: collectionName, record_id: id, data: { ...data, id, workspaceId }, is_soft_deleted: false, updated_at: timestamp }, { onConflict: "workspace_id,collection_name,record_id" });
+  if (error) throw error;
+}
+
+// Secured storefront contract. The standalone sales app can submit orders with
+// an idempotency key; the same external order is never duplicated.
+app.post("/api/integrations/waas/orders", async (req, res) => {
+  const supplied = String(req.headers["x-waas-ingest-key"] || "");
+  if (!process.env.WAAS_INGEST_API_KEY || supplied !== process.env.WAAS_INGEST_API_KEY) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const parsed = waasOrderSchema.parse(req.body); const id = parsed.id || (parsed.externalId ? `external-${parsed.externalId}` : `waas-order-${crypto.randomUUID()}`); const now = new Date().toISOString();
+    const existing = await supabaseServer.from("bos_records").select("data").match({ workspace_id: supabaseWorkspaceId, collection_name: "waas_orders", record_id: id, is_soft_deleted: false }).maybeSingle();
+    if (existing.data?.data) return res.json({ success: true, id, duplicate: true, order: existing.data.data });
+    const order = { ...parsed, id, workspaceId: supabaseWorkspaceId, status: parsed.paymentStatus === "paid" ? "paid" : "pending_payment", createdAt: now, updatedAt: now };
+    await upsertWaasRecord(supabaseWorkspaceId, "waas_orders", id, order);
+    await upsertWaasRecord(supabaseWorkspaceId, "waas_activities", `order-created-${id}`, { actor: "storefront", action: "order_created", entityType: "waas_order", entityId: id, createdAt: now });
+    return res.status(201).json({ success: true, id, order });
+  } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid WAAS order", details: error.issues }); return res.status(503).json({ error: "WAAS order could not be recorded" }); }
+});
+
+app.post("/api/waas/orders/:id/deploy", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations"]), async (req: AuthenticatedRequest, res) => {
+  try {
+    const orderId = req.params.id; const { data: row, error } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: req.workspaceId, collection_name: "waas_orders", record_id: orderId, is_soft_deleted: false }).maybeSingle(); if (error) throw error; if (!row?.data) return res.status(404).json({ error: "WAAS order not found" });
+    const deploymentId = `waas-deployment-${crypto.randomUUID()}`; const now = new Date().toISOString(); const order = row.data as any; const provider = getHostingProvider();
+    const hosting = await provider.createWebsite({ customerName: order.customerName });
+    await upsertWaasRecord(req.workspaceId!, "waas_deployments", deploymentId, { workspaceId: req.workspaceId, orderId, status: "review_required", provider: "mock", currentStep: "provision_site", startedAt: now, completedAt: now, createdAt: now, updatedAt: now });
+    const websiteId = `waas-site-${crypto.randomUUID()}`; await upsertWaasRecord(req.workspaceId!, "waas_websites", websiteId, { workspaceId: req.workspaceId, orderId, customerId: order.customerId, productType: order.productType, niche: order.niche, style: order.style, status: "review_required", deploymentStatus: "complete", wordpressInstallationId: hosting.installationId, temporaryUrl: hosting.temporaryUrl, lastHealthCheck: now, createdAt: now, updatedAt: now });
+    await upsertWaasRecord(req.workspaceId!, "waas_orders", orderId, { ...order, websiteId, deploymentId, status: "review_required", updatedAt: now });
+    return res.json({ success: true, deploymentId, websiteId, provider: "mock", requiresApproval: true });
+  } catch (error) { console.error("WAAS deployment failed", error); return res.status(503).json({ error: "WAAS deployment could not be started" }); }
+});
 
 app.post("/api/webhooks/stripe", express.raw({ type: "application/json", limit: "1mb" }), async (req, res) => {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || process.env.stripe_webhook_secret;

@@ -297,6 +297,24 @@ export interface ActivityRecord {
   createdAt: string;
 }
 
+// WAAS managed WordPress operating model. These records are additive to the
+// existing CRM so future storefront and provider integrations can use stable
+// contracts without changing Amway data.
+export type WaasProductType = "launch" | "business";
+export type WaasOrderStatus = "pending_payment" | "paid" | "awaiting_onboarding" | "onboarding_in_progress" | "ready_for_deployment" | "deploying" | "review_required" | "customer_review" | "approved" | "live" | "cancelled" | "failed";
+export type WaasWebsiteStatus = "onboarding" | "queued" | "deploying" | "review_required" | "customer_review" | "live" | "suspended" | "failed";
+export type WaasDeploymentStatus = "queued" | "running" | "waiting" | "failed" | "review_required" | "complete" | "cancelled";
+export type WaasTicketStatus = "new" | "open" | "in_progress" | "waiting_for_customer" | "resolved" | "closed";
+export interface WaasPlan { id: string; workspaceId: string; name: string; productType: WaasProductType; setupFee: number; recurringFee: number; billingInterval: "month" | "year" | "one_time"; pagesIncluded: number; updateAllowance: number; supportSlaHours: number; features: string[]; currency: string; active: boolean; createdAt: string; updatedAt: string; }
+export interface WaasTemplate { id: string; workspaceId: string; name: string; productType: WaasProductType; niche: string; style: "modern" | "bold" | "premium"; version: string; previewImage?: string; demoUrl?: string; status: "draft" | "active" | "retired"; themePackageId: string; configuration: Record<string, unknown>; supportedSections: string[]; aiPromptProfile?: string; deploymentMetadata?: Record<string, unknown>; changelog?: string; createdAt: string; updatedAt: string; }
+export interface WaasOrder { id: string; workspaceId: string; customerId?: string; customerName: string; customerEmail?: string; productType: WaasProductType; planId?: string; subscriptionId?: string; websiteId?: string; templateId?: string; niche?: string; style?: string; status: WaasOrderStatus; paymentStatus: "pending" | "paid" | "failed" | "refunded"; onboardingId?: string; deploymentId?: string; createdAt: string; updatedAt: string; }
+export interface WaasOnboarding { id: string; workspaceId: string; orderId: string; completionPercentage: number; business: Record<string, unknown>; branding: Record<string, unknown>; services: Record<string, unknown>; website: Record<string, unknown>; assets: Array<{ name: string; url: string; type: string }>; state: "not_started" | "in_progress" | "complete"; updatedAt: string; }
+export interface WaasWebsite { id: string; workspaceId: string; customerId?: string; orderId?: string; domain?: string; temporaryUrl?: string; liveUrl?: string; wordpressInstallationId?: string; hostinger?: Record<string, string>; productType: WaasProductType; niche?: string; style?: string; theme?: string; templateId?: string; version?: string; status: WaasWebsiteStatus; sslStatus?: string; deploymentStatus?: string; wordpressVersion?: string; pluginVersions?: Record<string, string>; lastBackup?: string; lastHealthCheck?: string; publishedAt?: string; subscriptionId?: string; supportAllowance?: number; updateAllowanceUsed?: number; createdAt: string; updatedAt: string; }
+export interface WaasDeploymentStep { id: string; deploymentId: string; name: string; status: "queued" | "running" | "complete" | "failed" | "skipped"; startedAt?: string; completedAt?: string; logs?: string[]; errorMessage?: string; retryCount: number; }
+export interface WaasDeployment { id: string; workspaceId: string; orderId?: string; websiteId?: string; status: WaasDeploymentStatus; currentStep?: string; provider: "hostinger" | "mock"; approvedAt?: string; startedAt?: string; completedAt?: string; errorMessage?: string; createdAt: string; updatedAt: string; }
+export interface WaasSupportTicket { id: string; workspaceId: string; ticketNumber: string; customerId?: string; websiteId?: string; orderId?: string; subject: string; description: string; category: "content_update" | "technical_issue" | "website_down" | "domain_dns" | "form_lead" | "email" | "billing" | "seo" | "feature_request" | "general"; priority: "critical" | "high" | "normal" | "request"; status: WaasTicketStatus; assignedTo?: string; source: "admin" | "customer_portal" | "connector"; slaDueAt?: string; updateClassification?: "included" | "chargeable" | "not_an_update" | "requires_upgrade"; createdAt: string; updatedAt: string; }
+export interface WaasActivity { id: string; workspaceId: string; actor: string; action: string; entityType: string; entityId?: string; metadata?: Record<string, unknown>; createdAt: string; }
+
 export interface AffiliateRecord {
   id: string;
   workspaceId: string;

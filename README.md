@@ -61,3 +61,30 @@ Set `BOOTSTRAP_ADMIN_EMAIL` to the exact email address of the first administrato
 4. An invited administrator can sign in and access only the configured Supabase workspace.
 5. A draft proposal can be marked ready, opened through its public link and accepted.
 6. Preview is reviewed before production promotion.
+
+## WAAS managed WordPress operations
+
+The `/waas` admin route is the internal operating system for the standalone
+Managed WordPress storefront. It uses the existing workspace-scoped
+`bos_records` document store and adds these collections: `waas_plans`,
+`waas_templates`, `waas_orders`, `waas_onboardings`, `waas_websites`,
+`waas_deployments`, `waas_deployment_steps`, `waas_support_tickets`, and
+`waas_activities`. A migration with partial indexes is in
+`supabase/migrations/202609060001_waas_operating_model.sql`.
+
+The storefront order contract is `POST /api/integrations/waas/orders` with the
+server-only `X-WAAS-Ingest-Key` header (`WAAS_INGEST_API_KEY`). It is validated
+with Zod and idempotent by order id/external id. Admin deployment is
+`POST /api/waas/orders/:id/deploy`; it is authenticated, workspace-scoped and
+currently uses a safe mock Hostinger provider. No provider credentials are
+invented or exposed to the browser. Replace `src/server/hostingerProvider.ts`
+with a real server-side Hostinger adapter when the account API contract and
+credentials are available.
+
+The WAAS console seeds configurable Launch/Business plans and a template
+library covering the initial niches and Modern style when the workspace is
+empty. Templates store structured section configuration (for example H02,
+S03, A01, T02, F01, C03, CT01), so new styles, niches and versions can be
+added as data rather than new page implementations. Deployment is intentionally
+review-gated: the mock adapter reaches `review_required`, never automatically
+publishes a customer site.

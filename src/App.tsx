@@ -52,6 +52,7 @@ const MoneyTasks = lazyWithChunkRecovery(() => import("./pages/MoneyTasks").then
 const Analytics = lazyWithChunkRecovery(() => import("./pages/Analytics").then(module => ({ default: module.Analytics })), "analytics");
 const OperationsControl = lazyWithChunkRecovery(() => import("./pages/OperationsControl").then(module => ({ default: module.OperationsControl })), "operations-control");
 const DailyBrief = lazyWithChunkRecovery(() => import("./pages/DailyBrief").then(module => ({ default: module.DailyBrief })), "daily-brief");
+const WaasOperations = lazyWithChunkRecovery(() => import("./pages/WaasOperations").then(module => ({ default: module.WaasOperations })), "waas-operations");
 
 const ADMIN: Role[] = ["super_admin", "workspace_admin"];
 const SALES: Role[] = [...ADMIN, "sales"];
@@ -77,6 +78,7 @@ function PrivatePage({ pathname, activeRole }: { pathname: string; activeRole: R
     "/products": { element: <Products />, roles: STAFF },
     "/customers": { element: <Customers />, roles: STAFF },
     "/diamond": { element: <DiamondPath />, roles: STAFF },
+    "/waas": { element: <WaasOperations />, roles: STAFF },
     "/revenue": { element: <Revenue />, roles: REVENUE_OPERATIONS },
     "/goals": { element: <Goals />, roles: REVENUE_OPERATIONS },
     "/analytics": { element: <Analytics />, roles: REVENUE_OPERATIONS },
