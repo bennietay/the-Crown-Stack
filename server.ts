@@ -971,8 +971,14 @@ app.post("/api/webhooks/stripe", express.raw({ type: "application/json", limit: 
 
 app.get("/healthz", (_req, res) => res.status(200).json({ status: "alive", timestamp: new Date().toISOString() }));
 app.get("/readyz", (_req, res) => {
-  const ready = supabaseReady && (!isProduction || appMode === "live") && (!isProduction || Boolean(process.env.WAAS_INGEST_API_KEY && process.env.WAAS_CONNECTOR_INGEST_SECRET));
-  res.status(ready ? 200 : 503).json({ status: ready ? "ready" : "not_ready" });
+  const checks = {
+    supabase: supabaseReady,
+    liveMode: !isProduction || appMode === "live",
+    waasIngest: !isProduction || Boolean(process.env.WAAS_INGEST_API_KEY),
+    connectorSecret: !isProduction || Boolean(process.env.WAAS_CONNECTOR_INGEST_SECRET),
+  };
+  const ready = Object.values(checks).every(Boolean);
+  res.status(ready ? 200 : 503).json({ status: ready ? "ready" : "not_ready", checks, environment: isProduction ? "production" : "development" });
 });
 
 app.post("/api/bootstrap", authenticateUser, async (req: AuthenticatedRequest, res) => {
