@@ -11,6 +11,7 @@ import { createSupabaseRequestClient, hasSupabaseServiceRole, supabaseServer, su
 import { decryptCredential, encryptCredential, EncryptedPayload } from "./src/server/credentialCrypto";
 import { revenueByBusiness, summarizeRevenue } from "./src/lib/revenue";
 import { getHostingProvider, getHostingProviderKind } from "./src/server/hostingerProvider";
+import { WAAS_DEPLOYMENT_STEPS } from "./src/server/waasDeploymentEngine";
 
 const isProduction = process.env.NODE_ENV === "production";
 const appMode = process.env.APP_MODE || (isProduction ? "" : "demo");
@@ -24,6 +25,8 @@ const publicProposalFunctionUrl = `${supabaseServerUrl}/functions/v1/public-prop
 
 const integrationStatus = () => ({
   supabaseConfigured: supabaseReady,
+  hostingerConfigured: Boolean(process.env.HOSTINGER_API_TOKEN && process.env.HOSTINGER_ORDER_ID && process.env.HOSTINGER_USERNAME),
+  waasDeploymentConfigured: Boolean(process.env.HOSTINGER_API_TOKEN && process.env.HOSTINGER_ORDER_ID && process.env.HOSTINGER_USERNAME && (process.env.HOSTINGER_WP_ADMIN_EMAIL || process.env.EMAIL_FROM) && process.env.CREDENTIAL_ENCRYPTION_KEY && process.env.WAAS_CONNECTOR_INGEST_SECRET),
   whatsappConfigured: Boolean(process.env.PUBLIC_WHATSAPP_URL || (process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID)),
   whatsappApiConfigured: Boolean(process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID),
   // Vercel preserves variable names exactly; accept the lowercase name that was
@@ -38,6 +41,7 @@ const integrationStatus = () => ({
 });
 
 const integrationEncryptionSecret = () => process.env.CREDENTIAL_ENCRYPTION_KEY || "";
+const waasAssetBucket = () => process.env.WAAS_ASSET_BUCKET || "waas-assets";
 const etsyApiHeader = () => `${process.env.ETSY_API_KEY || ""}:${process.env.ETSY_SHARED_SECRET || ""}`;
 const etsyScopes = ["listings_r", "listings_w", "shops_r", "transactions_r"];
 const safeAppRedirect = (query: string) => `${process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"}/businesses?${query}`;
@@ -328,6 +332,13 @@ app.use(helmet({
 
 const rateKey = (req: express.Request) => ipKeyGenerator(req.ip || req.socket.remoteAddress || "unknown");
 app.use("/api/", rateLimit({ windowMs: 15 * 60 * 1000, max: 120, keyGenerator: rateKey, message: { error: "Too many requests. Please try again later." } }));
+
+// Stripe must receive the exact request bytes for signature verification. All
+// other JSON endpoints are parsed here, before any route handlers are
+// registered. The previous parser was registered after most WAAS routes, so
+// production requests could reach Zod with an undefined body.
+const jsonBodyParser = express.json({ limit: "2mb", verify: (req, _res, buffer) => { (req as express.Request & { rawBody?: Buffer }).rawBody = Buffer.from(buffer); } });
+app.use((req, res, next) => req.path === "/api/webhooks/stripe" ? next() : jsonBodyParser(req, res, next));
 const captureLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 15, keyGenerator: rateKey, message: { error: "Too many enquiry attempts. Please try again later." } });
 const acceptanceLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, keyGenerator: rateKey, message: { error: "Too many acceptance attempts. Please try again later." } });
 
@@ -336,11 +347,39 @@ const waasOrderSchema = z.object({
 });
 const waasOnboardingSchema = z.object({ orderId: z.string().trim().min(1).max(120), business: z.record(z.string(), z.unknown()).default({}), branding: z.record(z.string(), z.unknown()).default({}), services: z.record(z.string(), z.unknown()).default({}), website: z.record(z.string(), z.unknown()).default({}), assets: z.array(z.object({ name: z.string().max(160), url: z.string().url().max(1000), type: z.string().max(80) })).max(50).default([]), completionPercentage: z.number().min(0).max(100).default(0) });
 const waasTicketSchema = z.object({ id: z.string().trim().max(120).optional(), orderId: z.string().trim().max(120).optional(), websiteId: z.string().trim().max(120).optional(), customerId: z.string().trim().max(120).optional(), subject: z.string().trim().min(2).max(200), description: z.string().trim().min(2).max(10000), category: z.enum(["content_update", "technical_issue", "website_down", "domain_dns", "form_lead", "email", "billing", "seo", "feature_request", "general"]).default("general"), priority: z.enum(["critical", "high", "normal", "request"]).default("normal") });
+const waasTicketMessageSchema = z.object({ ticketId: z.string().trim().min(1).max(120), body: z.string().trim().min(1).max(20000), authorType: z.enum(["customer", "admin", "connector"]).default("customer"), authorId: z.string().trim().max(120).optional(), internal: z.boolean().default(false) });
+const waasAssetSchema = z.object({ orderId: z.string().trim().max(120).optional(), websiteId: z.string().trim().max(120).optional(), ticketId: z.string().trim().max(120).optional(), originalName: z.string().trim().min(1).max(160), contentType: z.enum(["image/jpeg", "image/png", "image/webp", "image/svg+xml", "application/pdf"]), byteSize: z.number().int().positive().max(10 * 1024 * 1024), sha256: z.string().regex(/^[0-9a-f]{64}$/i) });
+const waasTicketStatusSchema = z.object({ status: z.enum(["new", "open", "in_progress", "waiting_for_customer", "resolved", "closed"]).optional(), priority: z.enum(["critical", "high", "normal", "request"]).optional() });
+
+const waasSlaHours: Record<string, { response: number; resolution: number }> = { critical: { response: 1, resolution: 4 }, high: { response: 4, resolution: 24 }, normal: { response: 8, resolution: 72 }, request: { response: 24, resolution: 120 } };
+function slaDeadline(priority: string, createdAt = new Date()) { const hours = waasSlaHours[priority] || waasSlaHours.normal; return { responseDueAt: new Date(createdAt.getTime() + hours.response * 3600000).toISOString(), resolutionDueAt: new Date(createdAt.getTime() + hours.resolution * 3600000).toISOString() }; }
 
 async function upsertWaasRecord(workspaceId: string, collectionName: string, id: string, data: Record<string, unknown>) {
   const timestamp = new Date().toISOString();
   const { error } = await supabaseServer.from("bos_records").upsert({ workspace_id: workspaceId, collection_name: collectionName, record_id: id, data: { ...data, id, workspaceId }, is_soft_deleted: false, updated_at: timestamp }, { onConflict: "workspace_id,collection_name,record_id" });
   if (error) throw error;
+}
+
+async function recordWaasActivity(workspaceId: string, action: string, entityType: string, entityId: string, metadata: Record<string, unknown> = {}, actor = "system") {
+  await upsertWaasRecord(workspaceId, "waas_activities", `activity-${crypto.randomUUID()}`, { actor, action, entityType, entityId, metadata, createdAt: new Date().toISOString() });
+}
+
+async function readWaasRecord(workspaceId: string, collectionName: string, recordId: string) {
+  const { data, error } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: collectionName, record_id: recordId, is_soft_deleted: false }).maybeSingle();
+  if (error) throw error;
+  return data?.data as Record<string, any> | undefined;
+}
+
+async function validateTicketAssociations(workspaceId: string, ticket: { customerId?: string; orderId?: string; websiteId?: string }) {
+  const customer = ticket.customerId ? await readWaasRecord(workspaceId, "customers", ticket.customerId) : undefined;
+  const order = ticket.orderId ? await readWaasRecord(workspaceId, "waas_orders", ticket.orderId) : undefined;
+  const website = ticket.websiteId ? await readWaasRecord(workspaceId, "waas_websites", ticket.websiteId) : undefined;
+  if (ticket.customerId && !customer) throw new Error("Referenced customer was not found");
+  if (ticket.orderId && !order) throw new Error("Referenced order was not found");
+  if (ticket.websiteId && !website) throw new Error("Referenced website was not found");
+  if (ticket.customerId && order?.customerId && order.customerId !== ticket.customerId) throw new Error("Order does not belong to the referenced customer");
+  if (ticket.customerId && website?.customerId && website.customerId !== ticket.customerId) throw new Error("Website does not belong to the referenced customer");
+  if (ticket.orderId && website?.orderId && website.orderId !== ticket.orderId) throw new Error("Website does not belong to the referenced order");
 }
 
 // Secured storefront contract. The standalone sales app can submit orders with
@@ -361,9 +400,123 @@ app.post("/api/integrations/waas/orders", async (req, res) => {
 
 function validWaasKey(req: express.Request) { const supplied = String(req.headers["x-waas-ingest-key"] || ""); return Boolean(process.env.WAAS_INGEST_API_KEY && supplied === process.env.WAAS_INGEST_API_KEY); }
 
+function validConnectorSignature(req: express.Request) {
+  const masterSecret = String(process.env.WAAS_CONNECTOR_INGEST_SECRET || "");
+  const websiteId = typeof req.body?.websiteId === "string" ? req.body.websiteId.trim() : "";
+  const timestamp = String(req.headers["x-bennietay-timestamp"] || "");
+  const supplied = String(req.headers["x-bennietay-signature"] || "");
+  const epoch = Number(timestamp);
+  if (!masterSecret || !websiteId || !supplied || !Number.isFinite(epoch) || Math.abs(Date.now() - epoch * 1000) > 300000) return false;
+  // Compromise of one WordPress installation must not grant authority to
+  // impersonate another customer site. Each connector receives only this
+  // deterministic, site-scoped key; the master stays on the admin server.
+  const siteSecret = crypto.createHmac("sha256", masterSecret).update(`website:${websiteId}`).digest("hex");
+  const raw = (req as express.Request & { rawBody?: Buffer }).rawBody || Buffer.from(JSON.stringify(req.body || {}));
+  const expected = Buffer.from(crypto.createHmac("sha256", siteSecret).update(`${timestamp}.`).update(raw).digest("hex"));
+  const actual = Buffer.from(supplied);
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
+const connectorLeadSchema = z.object({
+  externalId: z.string().trim().min(8).max(160),
+  websiteId: z.string().trim().min(1).max(120),
+  name: z.string().trim().min(2).max(160),
+  email: z.string().email().max(254),
+  phone: z.string().trim().max(80).optional(),
+  message: z.string().trim().max(10000).optional(),
+  sourceUrl: z.string().url().max(1000).optional(),
+});
+
+app.post("/api/integrations/waas/leads", async (req, res) => {
+  if (!validConnectorSignature(req)) return res.status(401).json({ error: "Invalid or expired connector signature" });
+  try {
+    const parsed = connectorLeadSchema.parse(req.body);
+    const website = await readWaasRecord(supabaseWorkspaceId, "waas_websites", parsed.websiteId);
+    if (!website) return res.status(404).json({ error: "Managed website not found" });
+    const eventId = `connector-${parsed.externalId}`;
+    const now = new Date().toISOString();
+    const leadId = `waas-lead-${crypto.randomUUID()}`;
+    const lead = { id: leadId, workspaceId: supabaseWorkspaceId, businessUnit: "WAAS", source: "managed_wordpress", sourceDetail: parsed.sourceUrl, websiteId: parsed.websiteId, customerId: website.customerId, companyName: website.businessName || website.domain || "Website enquiry", contactName: parsed.name, email: parsed.email.toLowerCase(), phone: parsed.phone || "", details: { message: parsed.message || "", connectorEventId: parsed.externalId }, status: "new", temperature: "warm", score: 50, createdAt: now, updatedAt: now };
+    const event = { externalId: parsed.externalId, websiteId: parsed.websiteId, leadId, receivedAt: now };
+    const { data: result, error: ingestError } = await supabaseServer.rpc("ingest_waas_connector_lead", { p_workspace_id: supabaseWorkspaceId, p_event_id: eventId, p_lead_id: leadId, p_event_data: event, p_lead_data: lead });
+    if (ingestError) throw ingestError;
+    if (result?.duplicate) return res.json({ success: true, duplicate: true, leadId: result.leadId });
+    await recordWaasActivity(supabaseWorkspaceId, "website_lead_received", "waas_website", parsed.websiteId, { leadId, externalId: parsed.externalId }, "wordpress_connector");
+    return res.status(201).json({ success: true, leadId });
+  } catch (error) {
+    if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid lead payload", details: error.issues });
+    console.error("WordPress connector lead ingestion failed", error);
+    return res.status(503).json({ error: "Lead could not be stored" });
+  }
+});
+
+const waasCustomerSchema = z.object({ id: z.string().trim().max(120).optional(), externalId: z.string().trim().max(200).optional(), name: z.string().trim().min(2).max(160), email: z.string().email().max(254).optional(), phone: z.string().trim().max(80).optional(), company: z.string().trim().max(160).optional(), country: z.string().trim().max(80).optional() });
+app.post("/api/integrations/waas/customers", async (req, res) => {
+  if (!validWaasKey(req)) return res.status(401).json({ error: "Unauthorized" });
+  try { const parsed = waasCustomerSchema.parse(req.body); const id = parsed.id || (parsed.externalId ? `external-customer-${parsed.externalId}` : `waas-customer-${crypto.randomUUID()}`); const existing = await supabaseServer.from("bos_records").select("data").match({ workspace_id: supabaseWorkspaceId, collection_name: "customers", record_id: id, is_soft_deleted: false }).maybeSingle(); if (existing.data?.data) return res.json({ success: true, duplicate: true, customer: existing.data.data }); const now = new Date().toISOString(); const customer = { ...parsed, id, workspaceId: supabaseWorkspaceId, createdAt: now, updatedAt: now }; await upsertWaasRecord(supabaseWorkspaceId, "customers", id, customer); await recordWaasActivity(supabaseWorkspaceId, "customer_created", "customer", id, { source: "storefront" }, "storefront"); return res.status(201).json({ success: true, customer }); } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid customer", details: error.issues }); return res.status(503).json({ error: "Customer could not be created" }); }
+});
+app.put("/api/integrations/waas/customers/:id", async (req, res) => {
+  if (!validWaasKey(req)) return res.status(401).json({ error: "Unauthorized" });
+  try { const parsed = waasCustomerSchema.partial().parse(req.body); const row = await supabaseServer.from("bos_records").select("data").match({ workspace_id: supabaseWorkspaceId, collection_name: "customers", record_id: req.params.id, is_soft_deleted: false }).maybeSingle(); if (!row.data?.data) return res.status(404).json({ error: "Customer not found" }); const customer = { ...(row.data.data as Record<string, unknown>), ...parsed, id: req.params.id, updatedAt: new Date().toISOString() }; await upsertWaasRecord(supabaseWorkspaceId, "customers", req.params.id, customer); await recordWaasActivity(supabaseWorkspaceId, "customer_updated", "customer", req.params.id, { source: "storefront" }, "storefront"); return res.json({ success: true, customer }); } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid customer", details: error.issues }); return res.status(503).json({ error: "Customer could not be updated" }); }
+});
+
 app.post("/api/integrations/waas/onboarding", async (req, res) => {
   if (!validWaasKey(req)) return res.status(401).json({ error: "Unauthorized" });
-  try { const parsed = waasOnboardingSchema.parse(req.body); const id = `onboarding-${parsed.orderId}`; const now = new Date().toISOString(); await upsertWaasRecord(supabaseWorkspaceId, "waas_onboardings", id, { ...parsed, id, workspaceId: supabaseWorkspaceId, state: parsed.completionPercentage >= 100 ? "complete" : "in_progress", updatedAt: now }); await upsertWaasRecord(supabaseWorkspaceId, "waas_orders", parsed.orderId, { status: parsed.completionPercentage >= 100 ? "ready_for_deployment" : "onboarding_in_progress", onboardingId: id, updatedAt: now }); return res.json({ success: true, id, completionPercentage: parsed.completionPercentage }); } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid onboarding payload", details: error.issues }); return res.status(503).json({ error: "Onboarding could not be saved" }); }
+  try {
+    const parsed = waasOnboardingSchema.parse(req.body);
+    const order = await readWaasRecord(supabaseWorkspaceId, "waas_orders", parsed.orderId);
+    if (!order) return res.status(404).json({ error: "Order not found" });
+    const id = `onboarding-${parsed.orderId}`; const now = new Date().toISOString();
+    await upsertWaasRecord(supabaseWorkspaceId, "waas_onboardings", id, { ...parsed, id, workspaceId: supabaseWorkspaceId, customerId: order.customerId, state: parsed.completionPercentage >= 100 ? "complete" : "in_progress", updatedAt: now });
+    await upsertWaasRecord(supabaseWorkspaceId, "waas_orders", parsed.orderId, { ...order, status: parsed.completionPercentage >= 100 ? "ready_for_deployment" : "onboarding_in_progress", onboardingId: id, updatedAt: now });
+    await recordWaasActivity(supabaseWorkspaceId, "onboarding_submitted", "waas_order", parsed.orderId, { completionPercentage: parsed.completionPercentage }, "storefront");
+    return res.json({ success: true, id, completionPercentage: parsed.completionPercentage });
+  } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid onboarding payload", details: error.issues }); return res.status(503).json({ error: "Onboarding could not be saved" }); }
+});
+
+app.post("/api/integrations/waas/assets/upload-url", async (req, res) => {
+  if (!validWaasKey(req)) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const parsed = waasAssetSchema.parse(req.body);
+    const assetId = `asset-${crypto.randomUUID()}`;
+    const safeName = parsed.originalName.replace(/[^a-zA-Z0-9._-]/g, "-").slice(-120) || "upload";
+    const storagePath = `${supabaseWorkspaceId}/${assetId}/${safeName}`;
+    const upload = await supabaseServer.storage.from(waasAssetBucket()).createSignedUploadUrl(storagePath);
+    if (upload.error || !upload.data) return res.status(503).json({ error: upload.error?.message || "Asset upload is unavailable" });
+    const now = new Date().toISOString();
+    const { error } = await supabaseServer.from("waas_assets").insert({ id: assetId, workspace_id: supabaseWorkspaceId, order_id: parsed.orderId || null, website_id: parsed.websiteId || null, ticket_id: parsed.ticketId || null, original_name: parsed.originalName, storage_path: storagePath, content_type: parsed.contentType, byte_size: parsed.byteSize, sha256: parsed.sha256.toLowerCase(), status: "pending", created_at: now, updated_at: now });
+    if (error) throw error;
+    return res.status(201).json({ assetId, path: storagePath, token: upload.data.token, signedUrl: upload.data.signedUrl, expiresInSeconds: 7200 });
+  } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid asset metadata", details: error.issues }); return res.status(503).json({ error: "Asset upload could not be prepared" }); }
+});
+
+app.post("/api/integrations/waas/assets/:assetId/complete", async (req, res) => {
+  if (!validWaasKey(req)) return res.status(401).json({ error: "Unauthorized" });
+  const shaSchema = z.object({ sha256: z.string().regex(/^[0-9a-f]{64}$/i).optional() });
+  try {
+    const parsed = shaSchema.parse(req.body);
+    const assetRow = await supabaseServer.from("waas_assets").select("*").eq("id", req.params.assetId).eq("workspace_id", supabaseWorkspaceId).maybeSingle();
+    if (assetRow.error) throw assetRow.error;
+    if (!assetRow.data) return res.status(404).json({ error: "Asset not found" });
+    const download = await supabaseServer.storage.from(waasAssetBucket()).download(assetRow.data.storage_path);
+    if (download.error || !download.data) return res.status(409).json({ error: "Uploaded asset could not be verified" });
+    const bytes = Buffer.from(await download.data.arrayBuffer());
+    if (bytes.length !== assetRow.data.byte_size) return res.status(422).json({ error: "Uploaded asset size does not match declared metadata" });
+    const actualSha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+    const expectedSha256 = String(parsed.sha256 || assetRow.data.sha256).toLowerCase();
+    if (actualSha256 !== expectedSha256) return res.status(422).json({ error: "Uploaded asset checksum does not match declared metadata" });
+    const updates: Record<string, unknown> = { status: "ready", sha256: actualSha256, updated_at: new Date().toISOString() };
+    const { data, error } = await supabaseServer.from("waas_assets").update(updates).eq("id", req.params.assetId).eq("workspace_id", supabaseWorkspaceId).select("*").maybeSingle();
+    if (error) throw error;
+    await recordWaasActivity(supabaseWorkspaceId, "asset_uploaded", "waas_asset", req.params.assetId, { path: data?.storage_path, sha256: actualSha256 }, "storefront");
+    return res.json({ success: true, asset: data });
+  } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid asset completion", details: error.issues }); return res.status(503).json({ error: "Asset could not be completed" }); }
+});
+
+app.post("/api/integrations/waas/orders/:id/payment", async (req, res) => {
+  if (!validWaasKey(req)) return res.status(401).json({ error: "Unauthorized" });
+  const schema = z.object({ eventId: z.string().trim().min(1).max(200), status: z.enum(["paid", "failed", "refunded"]), subscriptionId: z.string().trim().max(200).optional(), amount: z.number().nonnegative().optional(), currency: z.string().trim().max(3).optional() });
+  try { const parsed = schema.parse(req.body); const duplicate = await supabaseServer.from("bos_records").select("data").match({ workspace_id: supabaseWorkspaceId, collection_name: "waas_payment_events", record_id: parsed.eventId, is_soft_deleted: false }).maybeSingle(); if ((duplicate.data?.data as any)?.status === "processed") return res.json({ success: true, duplicate: true }); const orderRow = await supabaseServer.from("bos_records").select("data").match({ workspace_id: supabaseWorkspaceId, collection_name: "waas_orders", record_id: req.params.id, is_soft_deleted: false }).maybeSingle(); if (!orderRow.data?.data) return res.status(404).json({ error: "Order not found" }); const now = new Date().toISOString(); await upsertWaasRecord(supabaseWorkspaceId, "waas_payment_events", parsed.eventId, { ...parsed, orderId: req.params.id, status: "processing", receivedAt: now, updatedAt: now }); await upsertWaasRecord(supabaseWorkspaceId, "waas_orders", req.params.id, { ...(orderRow.data.data as Record<string, unknown>), paymentStatus: parsed.status, status: parsed.status === "paid" ? "paid" : parsed.status === "refunded" ? "cancelled" : "failed", subscriptionId: parsed.subscriptionId, paidAt: parsed.status === "paid" ? now : undefined, updatedAt: now }); await upsertWaasRecord(supabaseWorkspaceId, "waas_payment_events", parsed.eventId, { ...parsed, orderId: req.params.id, status: "processed", processedAt: now, updatedAt: now }); await recordWaasActivity(supabaseWorkspaceId, `payment_${parsed.status}`, "waas_order", req.params.id, { eventId: parsed.eventId }, "payment_provider"); return res.json({ success: true, orderId: req.params.id, status: parsed.status }); } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid payment update", details: error.issues }); return res.status(503).json({ error: "Payment update could not be applied" }); }
 });
 
 app.get("/api/integrations/waas/orders/:id/status", async (req, res) => {
@@ -394,7 +547,11 @@ app.post("/api/waas/orders/:id/checkout", authenticateUser, requireWorkspace(), 
     if (Number(plan.recurringFee) > 0) lineItems.push({ price_data: { currency, product_data: { name: `${plan.name} care plan` }, unit_amount: Math.round(Number(plan.recurringFee) * 100), recurring: { interval: plan.billingInterval === "year" ? "year" : "month" } }, quantity: 1 });
     if (!lineItems.length) return res.status(409).json({ error: "The selected plan has no billable amount" });
     const metadata = { workspaceId: req.workspaceId!, waasOrderId: order.id, planId: plan.id };
-    const session = await stripe.checkout.sessions.create({ mode: Number(plan.recurringFee) > 0 ? "subscription" : "payment", line_items: lineItems, customer_email: order.customerEmail || undefined, metadata, subscription_data: Number(plan.recurringFee) > 0 ? { metadata } : undefined, success_url: `${process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"}/waas?payment=success&order=${encodeURIComponent(order.id)}`, cancel_url: `${process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"}/waas?payment=cancelled&order=${encodeURIComponent(order.id)}` });
+    if (order.checkoutSessionId) {
+      const existingSession = await stripe.checkout.sessions.retrieve(String(order.checkoutSessionId));
+      if (existingSession.status === "open" && existingSession.url) return res.json({ checkoutUrl: existingSession.url, sessionId: existingSession.id, reused: true });
+    }
+    const session = await stripe.checkout.sessions.create({ mode: Number(plan.recurringFee) > 0 ? "subscription" : "payment", line_items: lineItems, customer_email: order.customerEmail || undefined, metadata, subscription_data: Number(plan.recurringFee) > 0 ? { metadata } : undefined, success_url: `${process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"}/waas?payment=success&order=${encodeURIComponent(order.id)}`, cancel_url: `${process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"}/waas?payment=cancelled&order=${encodeURIComponent(order.id)}` }, { idempotencyKey: `waas-checkout-${req.workspaceId}-${order.id}` });
     await upsertWaasRecord(req.workspaceId!, "waas_orders", order.id, { ...order, paymentStatus: "pending", checkoutSessionId: session.id, updatedAt: new Date().toISOString() });
     return res.json({ checkoutUrl: session.url, sessionId: session.id });
   } catch (error) { console.error("WAAS checkout creation failed", error); return res.status(503).json({ error: "WAAS checkout could not be created" }); }
@@ -402,50 +559,346 @@ app.post("/api/waas/orders/:id/checkout", authenticateUser, requireWorkspace(), 
 
 app.post("/api/integrations/waas/tickets", async (req, res) => {
   if (!validWaasKey(req)) return res.status(401).json({ error: "Unauthorized" });
-  try { const parsed = waasTicketSchema.parse(req.body); const id = parsed.id || `portal-ticket-${crypto.randomUUID()}`; const now = new Date().toISOString(); const existing = await supabaseServer.from("bos_records").select("data").match({ workspace_id: supabaseWorkspaceId, collection_name: "waas_support_tickets", record_id: id, is_soft_deleted: false }).maybeSingle(); if (existing.data?.data) return res.json({ success: true, duplicate: true, ticket: existing.data.data }); const ticket = { ...parsed, id, workspaceId: supabaseWorkspaceId, ticketNumber: `WAAS-${Date.now().toString().slice(-6)}`, source: "customer_portal", status: "new", createdAt: now, updatedAt: now }; await upsertWaasRecord(supabaseWorkspaceId, "waas_support_tickets", id, ticket); return res.status(201).json({ success: true, ticket }); } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid support ticket", details: error.issues }); return res.status(503).json({ error: "Support ticket could not be created" }); }
+  try {
+    const parsed = waasTicketSchema.parse(req.body);
+    await validateTicketAssociations(supabaseWorkspaceId, parsed);
+    const id = parsed.id || `portal-ticket-${crypto.randomUUID()}`;
+    const now = new Date(); const nowIso = now.toISOString();
+    const existing = await readWaasRecord(supabaseWorkspaceId, "waas_support_tickets", id);
+    if (existing) return res.json({ success: true, duplicate: true, ticket: existing });
+    const ticket = { ...parsed, id, workspaceId: supabaseWorkspaceId, ticketNumber: `WAAS-${Date.now().toString().slice(-6)}-${crypto.randomBytes(2).toString("hex").toUpperCase()}`, source: "customer_portal", status: "new", createdAt: nowIso, updatedAt: nowIso };
+    await upsertWaasRecord(supabaseWorkspaceId, "waas_support_tickets", id, ticket);
+    const deadlines = slaDeadline(parsed.priority, now);
+    await supabaseServer.from("waas_ticket_sla").upsert({ id: `sla-${id}`, workspace_id: supabaseWorkspaceId, ticket_id: id, priority: parsed.priority, response_due_at: deadlines.responseDueAt, resolution_due_at: deadlines.resolutionDueAt, updated_at: nowIso }, { onConflict: "workspace_id,ticket_id" });
+    await recordWaasActivity(supabaseWorkspaceId, "ticket_created", "waas_ticket", id, { priority: parsed.priority, category: parsed.category }, "customer_portal");
+    return res.status(201).json({ success: true, ticket, sla: deadlines });
+  } catch (error) {
+    if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid support ticket", details: error.issues });
+    if (error instanceof Error && /referenced|belong/i.test(error.message)) return res.status(409).json({ error: error.message });
+    return res.status(503).json({ error: "Support ticket could not be created" });
+  }
+});
+
+app.post("/api/integrations/waas/tickets/:ticketId/messages", async (req, res) => {
+  if (!validWaasKey(req)) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const parsed = waasTicketMessageSchema.parse({ ...req.body, ticketId: req.params.ticketId });
+    const id = `portal-message-${crypto.createHash("sha256").update(`${parsed.ticketId}:${parsed.body}:${parsed.authorId || "portal"}`).digest("hex").slice(0, 32)}`;
+    const existing = await supabaseServer.from("bos_records").select("data").match({ workspace_id: supabaseWorkspaceId, collection_name: "waas_ticket_messages", record_id: id, is_soft_deleted: false }).maybeSingle();
+    if (existing.data?.data) return res.json({ success: true, duplicate: true, message: existing.data.data });
+    const ticketRow = await supabaseServer.from("bos_records").select("data").match({ workspace_id: supabaseWorkspaceId, collection_name: "waas_support_tickets", record_id: parsed.ticketId, is_soft_deleted: false }).maybeSingle();
+    if (!ticketRow.data?.data) return res.status(404).json({ error: "Support ticket not found" });
+    const message = { ...parsed, id, workspaceId: supabaseWorkspaceId, createdAt: new Date().toISOString() };
+    await upsertWaasRecord(supabaseWorkspaceId, "waas_ticket_messages", id, message);
+    await upsertWaasRecord(supabaseWorkspaceId, "waas_support_tickets", parsed.ticketId, { ...(ticketRow.data?.data as Record<string, unknown> || {}), status: parsed.authorType === "customer" ? "open" : "in_progress", updatedAt: message.createdAt });
+    await recordWaasActivity(supabaseWorkspaceId, "ticket_message_added", "waas_ticket", parsed.ticketId, { messageId: id }, parsed.authorType);
+    return res.status(201).json({ success: true, message });
+  } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid ticket message", details: error.issues }); return res.status(503).json({ error: "Ticket message could not be created" }); }
+});
+
+app.get("/api/integrations/waas/tickets/:ticketId/messages", async (req, res) => {
+  if (!validWaasKey(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { data, error } = await supabaseServer.from("bos_records").select("record_id,data").match({ workspace_id: supabaseWorkspaceId, collection_name: "waas_ticket_messages", is_soft_deleted: false }).eq("data->>ticketId", req.params.ticketId).order("updated_at", { ascending: true });
+  if (error) return res.status(503).json({ error: "Ticket messages unavailable" });
+  return res.json({ messages: (data || []).map(row => ({ id: row.record_id, ...(row.data || {}) })) });
+});
+
+app.post("/api/waas/tickets/:ticketId/messages", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "support", "operations"]), async (req: AuthenticatedRequest, res) => {
+  try {
+    const parsed = waasTicketMessageSchema.parse({ ...req.body, ticketId: req.params.ticketId, authorType: "admin", authorId: req.user?.uid || undefined });
+    const ticketRow = await supabaseServer.from("bos_records").select("data").match({ workspace_id: req.workspaceId, collection_name: "waas_support_tickets", record_id: parsed.ticketId, is_soft_deleted: false }).maybeSingle();
+    if (!ticketRow.data?.data) return res.status(404).json({ error: "Support ticket not found" });
+    const id = `admin-message-${crypto.randomUUID()}`; const createdAt = new Date().toISOString();
+    await upsertWaasRecord(req.workspaceId!, "waas_ticket_messages", id, { ...parsed, id, workspaceId: req.workspaceId, createdAt });
+    await upsertWaasRecord(req.workspaceId!, "waas_support_tickets", parsed.ticketId, { ...(ticketRow.data.data as Record<string, unknown>), status: "in_progress", updatedAt: createdAt });
+    await supabaseServer.from("waas_ticket_sla").update({ first_responded_at: new Date().toISOString(), updated_at: createdAt }).eq("workspace_id", req.workspaceId).eq("ticket_id", parsed.ticketId).is("first_responded_at", null);
+    await recordWaasActivity(req.workspaceId!, "ticket_message_added", "waas_ticket", parsed.ticketId, { messageId: id }, "admin");
+    return res.status(201).json({ success: true, message: { ...parsed, id, workspaceId: req.workspaceId, createdAt } });
+  } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid ticket message", details: error.issues }); return res.status(503).json({ error: "Ticket message could not be created" }); }
+});
+
+app.patch("/api/waas/tickets/:ticketId", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "support", "operations"]), async (req: AuthenticatedRequest, res) => {
+  try {
+    const parsed = waasTicketStatusSchema.parse(req.body);
+    const ticketRow = await supabaseServer.from("bos_records").select("data").match({ workspace_id: req.workspaceId, collection_name: "waas_support_tickets", record_id: req.params.ticketId, is_soft_deleted: false }).maybeSingle();
+    if (!ticketRow.data?.data) return res.status(404).json({ error: "Support ticket not found" });
+    const updatedAt = new Date().toISOString(); const ticket = { ...(ticketRow.data.data as Record<string, unknown>), ...(parsed.status ? { status: parsed.status } : {}), ...(parsed.priority ? { priority: parsed.priority } : {}), updatedAt };
+    await upsertWaasRecord(req.workspaceId!, "waas_support_tickets", req.params.ticketId, ticket);
+    const slaPatch: Record<string, unknown> = { updated_at: updatedAt };
+    if (parsed.priority) { const deadlines = slaDeadline(parsed.priority); slaPatch.priority = parsed.priority; slaPatch.response_due_at = deadlines.responseDueAt; slaPatch.resolution_due_at = deadlines.resolutionDueAt; }
+    if (parsed.status === "resolved" || parsed.status === "closed") slaPatch.resolved_at = updatedAt;
+    await supabaseServer.from("waas_ticket_sla").update(slaPatch).eq("workspace_id", req.workspaceId).eq("ticket_id", req.params.ticketId);
+    await recordWaasActivity(req.workspaceId!, "ticket_updated", "waas_ticket", req.params.ticketId, parsed, req.user?.email || "admin");
+    return res.json({ success: true, ticket });
+  } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid ticket update", details: error.issues }); return res.status(503).json({ error: "Support ticket could not be updated" }); }
+});
+
+app.get("/api/waas/tickets/sla", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "support", "operations"]), async (req: AuthenticatedRequest, res) => {
+  const { data, error } = await supabaseServer.from("waas_ticket_sla").select("*").eq("workspace_id", req.workspaceId);
+  if (error) return res.status(503).json({ error: "Ticket SLA data unavailable" });
+  const now = Date.now();
+  return res.json({ sla: (data || []).map(row => ({ ...row, response_breached: Boolean(row.response_breached || (!row.first_responded_at && new Date(row.response_due_at).getTime() < now)), resolution_breached: Boolean(row.resolution_breached || (!row.resolved_at && new Date(row.resolution_due_at).getTime() < now)) })) });
+});
+
+app.post("/api/waas/websites/:websiteId/update-usage", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "support", "operations"]), async (req: AuthenticatedRequest, res) => {
+  const schema = z.object({ ticketId: z.string().trim().max(120).optional(), classification: z.enum(["included", "chargeable", "not_an_update", "requires_upgrade"]) });
+  try {
+    const parsed = schema.parse(req.body); const workspaceId = req.workspaceId!; const websiteRow = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "waas_websites", record_id: req.params.websiteId, is_soft_deleted: false }).maybeSingle();
+    if (!websiteRow.data?.data) return res.status(404).json({ error: "Website not found" });
+    const website = websiteRow.data.data as any; const periodStart = new Date(); periodStart.setUTCDate(1); periodStart.setUTCHours(0, 0, 0, 0); const start = periodStart.toISOString(); const periodEnd = new Date(Date.UTC(periodStart.getUTCFullYear(), periodStart.getUTCMonth() + 1, 1)).toISOString();
+    const usageRows = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "waas_update_usage", is_soft_deleted: false }).eq("data->>websiteId", req.params.websiteId).gte("data->>periodStart", start);
+    const used = (usageRows.data || []).filter(row => (row.data as any)?.classification === "included").reduce((sum, row) => sum + Number((row.data as any)?.used || 0), 0); const allowance = Number(website.supportAllowance || website.updateAllowance || 0);
+    if (parsed.classification === "included" && used >= allowance) return res.status(409).json({ error: "Included update allowance exhausted", allowance, used });
+    const id = `usage-${req.params.websiteId}-${crypto.randomUUID()}`; const usage = { id, workspaceId, websiteId: req.params.websiteId, ticketId: parsed.ticketId, periodStart: start, periodEnd, allowance, used: parsed.classification === "included" ? used + 1 : used, classification: parsed.classification, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const { data: atomicUsage, error: atomicError } = await supabaseServer.rpc("record_waas_update_usage", { p_workspace_id: workspaceId, p_website_id: req.params.websiteId, p_usage_id: id, p_usage: usage, p_allowance: allowance });
+    if (atomicError) { if (/allowance exhausted/i.test(atomicError.message || "")) return res.status(409).json({ error: "Included update allowance exhausted", allowance, used }); throw atomicError; }
+    const recordedUsage = (atomicUsage || usage) as any;
+    await recordWaasActivity(workspaceId, "update_usage_recorded", "waas_website", req.params.websiteId, { classification: parsed.classification, allowance, used: recordedUsage.used }); return res.status(201).json({ success: true, usage: recordedUsage });
+  } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid update usage", details: error.issues }); return res.status(503).json({ error: "Update usage could not be recorded" }); }
+});
+
+app.get("/api/waas/websites/:websiteId/health", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations", "support"]), async (req: AuthenticatedRequest, res) => {
+  const websiteRow = await supabaseServer.from("bos_records").select("data").match({ workspace_id: req.workspaceId, collection_name: "waas_websites", record_id: req.params.websiteId, is_soft_deleted: false }).maybeSingle();
+  if (websiteRow.error) return res.status(503).json({ error: "Website health unavailable" });
+  if (!websiteRow.data?.data) return res.status(404).json({ error: "Website not found" });
+  const website = websiteRow.data.data as any;
+  try { const provider = getHostingProvider(); const health = website.wordpressInstallationId ? await provider.getWebsiteStatus(website.wordpressInstallationId) : { status: "not_provisioned", sslStatus: "unknown" }; const checkedAt = new Date().toISOString(); const updated = { ...website, status: health.status === "ready" && website.status !== "live" ? website.status : health.status, sslStatus: health.sslStatus, lastHealthCheck: checkedAt, updatedAt: checkedAt }; await upsertWaasRecord(req.workspaceId!, "waas_websites", req.params.websiteId, updated); await recordWaasActivity(req.workspaceId!, "website_health_checked", "waas_website", req.params.websiteId, health); return res.json({ success: true, health, checkedAt }); } catch (error) { return res.status(503).json({ error: error instanceof Error ? error.message : "Website health check failed" }); }
+});
+
+app.post("/api/waas/websites/:websiteId/wordpress-access", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations"]), async (req: AuthenticatedRequest, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try {
+    const website = await readWaasRecord(req.workspaceId!, "waas_websites", req.params.websiteId);
+    if (!website) return res.status(404).json({ error: "Website not found" });
+    const credentialRef = String(website.wordpressCredentialRef || "");
+    if (!credentialRef) return res.status(409).json({ error: "WordPress access has not been provisioned" });
+    const credentials = await readEncryptedIntegration<{ email: string; login: string; password: string }>(req.workspaceId!, credentialRef);
+    if (!credentials) return res.status(404).json({ error: "WordPress credentials are unavailable" });
+    await recordWaasActivity(req.workspaceId!, "wordpress_access_revealed", "waas_website", req.params.websiteId, {}, req.user?.email || "admin");
+    return res.json({ login: credentials.login, password: credentials.password, email: credentials.email, adminUrl: `${String(website.temporaryUrl || website.liveUrl || "").replace(/\/$/, "")}/wp-admin/` });
+  } catch { return res.status(503).json({ error: "WordPress access could not be retrieved" }); }
 });
 
 app.post("/api/waas/orders/:id/deploy", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations"]), async (req: AuthenticatedRequest, res) => {
   try {
+    if (isProduction && !integrationStatus().waasDeploymentConfigured) return res.status(503).json({ error: "WAAS deployment is not fully configured; Hostinger, WordPress admin email, encryption and connector secrets are required" });
     const orderId = req.params.id; const { data: row, error } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: req.workspaceId, collection_name: "waas_orders", record_id: orderId, is_soft_deleted: false }).maybeSingle(); if (error) throw error; if (!row?.data) return res.status(404).json({ error: "WAAS order not found" });
-    const deploymentId = `waas-deployment-${crypto.randomUUID()}`; const now = new Date().toISOString(); const order = row.data as any; const provider = getHostingProvider();
-    const hosting = await provider.createWebsite({ customerName: order.customerName });
-    await upsertWaasRecord(req.workspaceId!, "waas_deployments", deploymentId, { workspaceId: req.workspaceId, orderId, status: "review_required", provider: "mock", currentStep: "provision_site", startedAt: now, completedAt: now, createdAt: now, updatedAt: now });
-    const websiteId = `waas-site-${crypto.randomUUID()}`; await upsertWaasRecord(req.workspaceId!, "waas_websites", websiteId, { workspaceId: req.workspaceId, orderId, customerId: order.customerId, productType: order.productType, niche: order.niche, style: order.style, status: "review_required", deploymentStatus: "complete", wordpressInstallationId: hosting.installationId, temporaryUrl: hosting.temporaryUrl, lastHealthCheck: now, createdAt: now, updatedAt: now });
-    await upsertWaasRecord(req.workspaceId!, "waas_orders", orderId, { ...order, websiteId, deploymentId, status: "review_required", updatedAt: now });
-    return res.json({ success: true, deploymentId, websiteId, provider: "mock", requiresApproval: true });
+    const order = row.data as any;
+    if (!['paid', 'ready_for_deployment', 'failed', 'deploying'].includes(String(order.status))) return res.status(409).json({ error: "Order must be paid and onboarding-ready before deployment" });
+    const candidateId = `waas-deployment-${crypto.randomUUID()}`;
+    const { data: durableJob, error: queueError } = await supabaseServer.rpc("ensure_waas_deployment_job", { p_workspace_id: req.workspaceId!, p_order_id: orderId, p_deployment_id: candidateId });
+    if (queueError || !durableJob?.deployment_id) throw queueError || new Error("Deployment queue unavailable");
+    const deploymentId = String(durableJob.deployment_id);
+    const existing = await supabaseServer.from("bos_records").select("data").match({ workspace_id: req.workspaceId, collection_name: "waas_deployments", record_id: deploymentId, is_soft_deleted: false }).maybeSingle();
+    const now = new Date().toISOString();
+    if (!existing.data?.data) {
+      await upsertWaasRecord(req.workspaceId!, "waas_deployments", deploymentId, { id: deploymentId, workspaceId: req.workspaceId, orderId, status: "queued", provider: getHostingProviderKind(), currentStep: WAAS_DEPLOYMENT_STEPS[0], createdAt: now, updatedAt: now });
+    } else if (["waiting", "failed"].includes(String((existing.data.data as any).status))) {
+      await upsertWaasRecord(req.workspaceId!, "waas_deployments", deploymentId, { ...(existing.data.data as any), status: "queued", errorMessage: undefined, updatedAt: now });
+      await supabaseServer.from("waas_deployment_jobs").update({ status: "queued", worker_id: null, lease_expires_at: null, available_at: now, last_error: null, updated_at: now }).eq("workspace_id", req.workspaceId).eq("deployment_id", deploymentId).in("status", ["failed", "leased"]);
+    }
+    await upsertWaasRecord(req.workspaceId!, "waas_orders", orderId, { ...order, deploymentId, status: "deploying", updatedAt: now });
+    await recordWaasActivity(req.workspaceId!, "deployment_queued", "waas_deployment", deploymentId, { orderId }, req.user?.email || "admin");
+    return res.status(202).json({ success: true, deploymentId, status: "queued", next: `/api/waas/deployments/${encodeURIComponent(deploymentId)}/run` });
   } catch (error) { console.error("WAAS deployment failed", error); return res.status(503).json({ error: "WAAS deployment could not be started" }); }
 });
 
-app.post("/api/waas/deployments/:id/run", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations"]), async (req: AuthenticatedRequest, res) => {
+function deploymentWorkerAuth(req: AuthenticatedRequest, res: express.Response, next: express.NextFunction) {
+  const expected = String(process.env.CRON_SECRET || "");
+  const supplied = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  if (expected && supplied === expected) {
+    req.user = { uid: "vercel_cron", email: "cron@bennie.com", role: "super_admin" } as any;
+    req.workspaceId = String(req.headers["x-workspace-id"] || supabaseWorkspaceId);
+    return next();
+  }
+  return authenticateUser(req, res, next);
+}
+
+app.post("/api/waas/deployments/:id/run", deploymentWorkerAuth, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations"]), async (req: AuthenticatedRequest, res) => {
   let deploymentId = req.params.id;
+  let currentStepName = "validate_order";
+  const workerId = String(req.requestId || crypto.randomUUID());
   try {
     const workspaceId = req.workspaceId!;
+    const { data: claimedJob, error: claimError } = await supabaseServer.rpc("claim_waas_deployment_job", { p_workspace_id: workspaceId, p_deployment_id: deploymentId, p_worker_id: workerId, p_lease_seconds: 300 });
+    if (claimError) throw claimError;
+    if (!claimedJob?.deployment_id) return res.status(409).json({ error: "Deployment is already running or is not queued" });
     const { data: deploymentRow, error: deploymentError } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "waas_deployments", record_id: deploymentId, is_soft_deleted: false }).maybeSingle(); if (deploymentError) throw deploymentError; if (!deploymentRow?.data) return res.status(404).json({ error: "Deployment not found" });
-    const deployment = deploymentRow.data as any; if (["complete", "cancelled"].includes(deployment.status)) return res.status(409).json({ error: "Deployment is not runnable in its current state" });
+    let deployment = deploymentRow.data as any; if (["complete", "cancelled", "review_required"].includes(deployment.status)) return res.status(409).json({ error: "Deployment is not runnable in its current state" });
     const { data: orderRow } = deployment.orderId ? await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "waas_orders", record_id: deployment.orderId, is_soft_deleted: false }).maybeSingle() : { data: null } as any; const order = orderRow?.data as any;
-    if (!order) return res.status(409).json({ error: "Deployment order is missing" });
+    if (!order) {
+      await supabaseServer.from("waas_deployment_jobs").update({ status: "failed", worker_id: null, lease_expires_at: null, last_error: "Deployment order is missing", updated_at: new Date().toISOString() }).eq("workspace_id", workspaceId).eq("deployment_id", deploymentId).eq("worker_id", workerId);
+      return res.status(409).json({ error: "Deployment order is missing" });
+    }
     const { data: onboardingRow } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "waas_onboardings", is_soft_deleted: false }).eq("data->>orderId", deployment.orderId).maybeSingle();
     if (!onboardingRow?.data || (onboardingRow.data as any).state !== "complete") {
       await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, status: "waiting", currentStep: "validate_onboarding", errorMessage: "Completed onboarding is required before deployment", updatedAt: new Date().toISOString() });
       await upsertWaasRecord(workspaceId, "waas_orders", deployment.orderId, { ...order, status: "awaiting_onboarding", updatedAt: new Date().toISOString() });
+      await supabaseServer.from("waas_deployment_jobs").update({ status: "failed", worker_id: null, lease_expires_at: null, last_error: "Completed onboarding is required before deployment", updated_at: new Date().toISOString() }).eq("workspace_id", workspaceId).eq("deployment_id", deploymentId).eq("worker_id", workerId);
       return res.status(409).json({ error: "Completed onboarding is required before deployment" });
     }
-    const names = ["validate_order", "validate_onboarding", "validate_domain", "provision_hosting", "install_wordpress", "deploy_managed_connector", "apply_template", "configure_lead_capture", "configure_domain_ssl", "run_qa", "review_gate"]; const now = new Date().toISOString(); const providerKind = getHostingProviderKind(); await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, status: "running", provider: providerKind, startedAt: deployment.startedAt || now, currentStep: names[0], updatedAt: now });
-    const provider = getHostingProvider(); let hosting: { installationId: string; temporaryUrl: string } | null = null;
+    const template = order.templateId ? await readWaasRecord(workspaceId, "waas_templates", String(order.templateId)) : undefined;
+    if (!template || template.status !== "active") {
+      await supabaseServer.from("waas_deployment_jobs").update({ status: "failed", worker_id: null, lease_expires_at: null, last_error: "An active template must be assigned before deployment", updated_at: new Date().toISOString() }).eq("workspace_id", workspaceId).eq("deployment_id", deploymentId).eq("worker_id", workerId);
+      throw new Error("An active template must be assigned before deployment");
+    }
+    if (template.productType !== order.productType) throw new Error("The selected template does not match the ordered product");
+    const themePackageId = String(template.themePackageId || (order.productType === "launch" ? "bennietay-launch" : "bennietay-business"));
+    const plan = order.planId ? await readWaasRecord(workspaceId, "waas_plans", String(order.planId)) : undefined;
+    const names = WAAS_DEPLOYMENT_STEPS; const now = new Date().toISOString(); const providerKind = getHostingProviderKind(); await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, status: "running", provider: providerKind, startedAt: deployment.startedAt || now, currentStep: deployment.currentStep || names[0], updatedAt: now }); deployment = { ...deployment, status: "running", provider: providerKind, startedAt: deployment.startedAt || now, currentStep: deployment.currentStep || names[0] };
+    const provider = getHostingProvider(); let hosting: { installationId: string; temporaryUrl: string } | null = deployment.hostingInstallationId ? { installationId: deployment.hostingInstallationId, temporaryUrl: deployment.temporaryUrl } : null; let wordpressVersion = deployment.wordpressVersion;
+    const websiteId = deployment.websiteId || `waas-site-${crypto.randomUUID()}`;
+    if (!deployment.websiteId) { deployment = { ...deployment, websiteId }; await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, updatedAt: new Date().toISOString() }); }
+    const credentialRef = String(deployment.wordpressCredentialRef || `waas-wordpress-${deploymentId}`);
+    let wordpressCredentials = await readEncryptedIntegration<{ email: string; login: string; password: string; siteTitle: string }>(workspaceId, credentialRef);
+    if (!wordpressCredentials) {
+      const email = String(process.env.HOSTINGER_WP_ADMIN_EMAIL || process.env.EMAIL_FROM || "").trim();
+      if (!email) throw new Error("HOSTINGER_WP_ADMIN_EMAIL or EMAIL_FROM is required for WordPress administration");
+      wordpressCredentials = { email, login: `bennie_${crypto.randomBytes(6).toString("hex")}`, password: crypto.randomBytes(24).toString("base64url"), siteTitle: String((onboardingRow.data as any).business?.name || order.customerName || "Managed Website") };
+      await writeEncryptedIntegration(workspaceId, credentialRef, wordpressCredentials, { kind: "waas_wordpress_credentials", deploymentId });
+      deployment = { ...deployment, wordpressCredentialRef: credentialRef };
+      await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, updatedAt: new Date().toISOString() });
+    }
+    currentStepName = deployment.currentStep || names[0];
     for (const [index, name] of names.entries()) {
-      const stepId = `${deploymentId}-${name}`; const step = { id: stepId, workspaceId, deploymentId, name, status: "running", startedAt: new Date().toISOString(), retryCount: 0, logs: [`Started ${name}`] };
+      currentStepName = name;
+      const jobState = await supabaseServer.from("waas_deployment_jobs").select("status").eq("workspace_id", workspaceId).eq("deployment_id", deploymentId).maybeSingle();
+      if (jobState.data?.status === "cancelled") throw new Error("Deployment was cancelled");
+      const stepId = `${deploymentId}-${name}`;
+      const existingStepRow = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "waas_deployment_steps", record_id: stepId, is_soft_deleted: false }).maybeSingle();
+      const existingStep = existingStepRow.data?.data as any;
+      if (existingStep?.status === "complete") continue;
+      const step = { ...(existingStep || {}), id: stepId, workspaceId, deploymentId, name, status: "running", startedAt: new Date().toISOString(), retryCount: Number(existingStep?.retryCount || 0), logs: [...(existingStep?.logs || []), `Started ${name}`] };
       await upsertWaasRecord(workspaceId, "waas_deployment_steps", stepId, step);
-      if (name === "validate_domain" && !String((onboardingRow.data as any).website?.domain || "").trim()) throw new Error("A domain is required before fulfilment can start");
-      if (name === "provision_hosting") hosting = await provider.createWebsite({ customerName: order.customerName, domain: String((onboardingRow.data as any).website?.domain || "").trim() || undefined });
+      await supabaseServer.from("waas_deployment_jobs").update({ lease_expires_at: new Date(Date.now() + 300000).toISOString(), updated_at: new Date().toISOString() }).eq("workspace_id", workspaceId).eq("deployment_id", deploymentId).eq("worker_id", workerId).eq("status", "leased");
+      if (process.env.WAAS_MOCK_FAIL_STEP === name && providerKind === "mock") throw new Error(`Configured mock failure at ${name}`);
+      const domain = String((onboardingRow.data as any).website?.domain || "").trim();
+      if (name === "validate_domain" && !domain) throw new Error("A domain is required before fulfilment can start");
+      if (name === "provision_hosting" && !hosting) { hosting = await provider.createWebsite({ customerName: order.customerName, domain: domain || undefined }); deployment = { ...deployment, hostingInstallationId: hosting.installationId, temporaryUrl: hosting.temporaryUrl }; await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, updatedAt: new Date().toISOString() }); }
+      if (name === "install_wordpress" && hosting) { const wp = await provider.installWordPress(hosting.installationId, wordpressCredentials); wordpressVersion = wp.wordpressVersion; if (wp.installationId) hosting = { ...hosting, installationId: wp.installationId }; deployment = { ...deployment, wordpressVersion, hostingInstallationId: hosting.installationId }; await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, updatedAt: new Date().toISOString() }); }
+      if (name === "deploy_managed_connector" && hosting) await provider.installPlugin(hosting.installationId, "bennietay-managed-connector");
+      if (name === "apply_template" && hosting) await provider.installTheme(hosting.installationId, themePackageId);
+      if (name === "configure_lead_capture" && hosting) {
+        const masterSecret = String(process.env.WAAS_CONNECTOR_INGEST_SECRET || "");
+        if (!masterSecret) throw new Error("WAAS_CONNECTOR_INGEST_SECRET is required to configure lead capture");
+        const connectorSecret = crypto.createHmac("sha256", masterSecret).update(`website:${websiteId}`).digest("hex");
+        const onboarding = onboardingRow.data as any;
+        await provider.configureManagedSite(hosting.installationId, { websiteId, adminApiUrl: String(process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"), connectorSecret, configuration: { ...template.configuration, business_name: onboarding.business?.name || order.customerName, hero: onboarding.business?.description || template.configuration?.hero, intro: onboarding.business?.description, phone: onboarding.business?.phone, email: onboarding.business?.email, service_areas: onboarding.business?.serviceAreas, services: onboarding.services?.mainServices, cta: onboarding.website?.preferredCta, primary_colour: onboarding.branding?.primaryColour, secondary_colour: onboarding.branding?.secondaryColour, template_id: order.templateId, template_version: template.version, niche: order.niche, style: order.style } });
+      }
+      if (name === "configure_domain_ssl" && hosting && domain) await provider.configureDomain(hosting.installationId, domain);
+      if (name === "run_qa") {
+        if (!hosting) throw new Error("Hosting must be provisioned before automated QA");
+        const health = await provider.getWebsiteStatus(hosting.installationId);
+        if (health.status !== "ready") throw new Error(`Website is not ready for review (status: ${health.status})`);
+        if (health.sslStatus !== "active") throw new Error(`Website SSL is not active (status: ${health.sslStatus})`);
+        if (providerKind === "hostinger") {
+          const response = await fetch(hosting.temporaryUrl, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(10000) });
+          if (response.status >= 500) throw new Error(`Preview returned HTTP ${response.status}`);
+        }
+        await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, qa: { passed: true, checkedAt: new Date().toISOString(), checks: ["hosting_ready", "ssl_active", "preview_reachable"] }, updatedAt: new Date().toISOString() });
+      }
       const completed = { ...step, status: "complete", completedAt: new Date().toISOString(), logs: [...step.logs, `Completed ${name}`] };
       await upsertWaasRecord(workspaceId, "waas_deployment_steps", stepId, completed);
-      if (index < names.length - 1) await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, status: "running", provider: providerKind, currentStep: names[index + 1], startedAt: deployment.startedAt || now, updatedAt: new Date().toISOString() });
+      deployment = { ...deployment, status: "running", provider: providerKind, currentStep: names[index + 1] || "review_gate", startedAt: deployment.startedAt || now, startedStep: index };
+      if (index < names.length - 1) await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, updatedAt: new Date().toISOString() });
     }
-    const websiteId = deployment.websiteId || `waas-site-${crypto.randomUUID()}`; const website = { id: websiteId, workspaceId, orderId: deployment.orderId, customerId: order.customerId, productType: order.productType, niche: order.niche, style: order.style, templateId: order.templateId, status: "review_required", deploymentStatus: "review_required", wordpressInstallationId: hosting?.installationId, temporaryUrl: hosting?.temporaryUrl, lastHealthCheck: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; await upsertWaasRecord(workspaceId, "waas_websites", websiteId, website);
+    const website = { id: websiteId, workspaceId, orderId: deployment.orderId, customerId: order.customerId, domain: String((onboardingRow.data as any).website?.domain || "").trim(), productType: order.productType, niche: order.niche, style: order.style, theme: themePackageId, templateId: order.templateId, version: String(template.version || "1.0.0"), status: "review_required", deploymentStatus: "review_required", wordpressInstallationId: hosting?.installationId, wordpressCredentialRef: credentialRef, temporaryUrl: hosting?.temporaryUrl, wordpressVersion, supportAllowance: Number(plan?.updateAllowance || 0), updateAllowanceUsed: 0, connectorConfigured: true, lastHealthCheck: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; await upsertWaasRecord(workspaceId, "waas_websites", websiteId, website);
     await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, status: "review_required", provider: providerKind, currentStep: "review_gate", websiteId, completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); await upsertWaasRecord(workspaceId, "waas_orders", deployment.orderId, { ...order, websiteId, deploymentId, status: "review_required", updatedAt: new Date().toISOString() });
+    await supabaseServer.from("waas_deployment_jobs").update({ status: "complete", worker_id: null, lease_expires_at: null, last_error: null, updated_at: new Date().toISOString() }).eq("workspace_id", workspaceId).eq("deployment_id", deploymentId).eq("worker_id", workerId);
+    await recordWaasActivity(workspaceId, "deployment_ready_for_review", "waas_deployment", deploymentId, { websiteId, previewUrl: hosting?.temporaryUrl });
     return res.json({ success: true, deploymentId, websiteId, status: "review_required", previewUrl: hosting?.temporaryUrl, requiresApproval: true });
-  } catch (error) { console.error("WAAS deployment run failed", error); if (req.workspaceId && deploymentId) { try { await upsertWaasRecord(req.workspaceId, "waas_deployments", deploymentId, { status: "failed", errorMessage: error instanceof Error ? error.message : "Deployment step failed", updatedAt: new Date().toISOString() }); } catch (persistError) { console.error("Could not persist WAAS deployment failure", persistError); } } return res.status(503).json({ error: error instanceof Error ? error.message : "WAAS deployment job failed" }); }
+  } catch (error) { console.error("WAAS deployment run failed", error); if (req.workspaceId && deploymentId) { try { const message = error instanceof Error ? error.message : "Deployment step failed"; const failedAt = new Date().toISOString(); const cancelled = message === "Deployment was cancelled"; const deploymentRow = await supabaseServer.from("bos_records").select("data").match({ workspace_id: req.workspaceId, collection_name: "waas_deployments", record_id: deploymentId, is_soft_deleted: false }).maybeSingle(); const failedDeployment = deploymentRow.data?.data as any; const failedStepName = currentStepName || failedDeployment?.currentStep; await upsertWaasRecord(req.workspaceId, "waas_deployments", deploymentId, { ...(failedDeployment || {}), status: cancelled ? "cancelled" : "failed", currentStep: failedStepName, errorMessage: cancelled ? undefined : message, updatedAt: failedAt }); if (!cancelled && failedStepName) { const stepId = `${deploymentId}-${failedStepName}`; const stepRow = await supabaseServer.from("bos_records").select("data").match({ workspace_id: req.workspaceId, collection_name: "waas_deployment_steps", record_id: stepId, is_soft_deleted: false }).maybeSingle(); await upsertWaasRecord(req.workspaceId, "waas_deployment_steps", stepId, { ...(stepRow.data?.data as any || {}), status: "failed", errorMessage: message, completedAt: failedAt, retryCount: Number((stepRow.data?.data as any)?.retryCount || 0) + 1 }); } if (!cancelled) await supabaseServer.from("waas_deployment_jobs").update({ status: "failed", worker_id: null, lease_expires_at: null, last_error: message, updated_at: failedAt }).eq("workspace_id", req.workspaceId).eq("deployment_id", deploymentId).eq("worker_id", workerId); await recordWaasActivity(req.workspaceId, cancelled ? "deployment_cancelled" : "deployment_failed", "waas_deployment", deploymentId, cancelled ? {} : { error: message, step: failedStepName }); } catch (persistError) { console.error("Could not persist WAAS deployment failure", persistError); } } return res.status(error instanceof Error && error.message === "Deployment was cancelled" ? 409 : 503).json({ error: error instanceof Error ? error.message : "WAAS deployment job failed" }); }
+});
+
+app.post("/api/waas/deployments/:id/retry", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations"]), async (req: AuthenticatedRequest, res) => {
+  const deploymentId = req.params.id; const workspaceId = req.workspaceId!;
+  const row = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "waas_deployments", record_id: deploymentId, is_soft_deleted: false }).maybeSingle();
+  if (row.error) return res.status(503).json({ error: "Deployment unavailable" });
+  if (!row.data?.data) return res.status(404).json({ error: "Deployment not found" });
+  const deployment = row.data.data as any;
+  if (deployment.status !== "failed") return res.status(409).json({ error: "Only failed deployments can be retried" });
+  const retryAt = new Date().toISOString();
+  await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, status: "queued", currentStep: deployment.currentStep || WAAS_DEPLOYMENT_STEPS[0], errorMessage: undefined, retryRequestedAt: retryAt, updatedAt: retryAt });
+  await supabaseServer.from("waas_deployment_jobs").update({ status: "queued", worker_id: null, lease_expires_at: null, available_at: retryAt, last_error: null, updated_at: retryAt }).eq("workspace_id", workspaceId).eq("deployment_id", deploymentId);
+  await recordWaasActivity(workspaceId, "deployment_retry_requested", "waas_deployment", deploymentId);
+  return res.json({ success: true, deploymentId, status: "queued", next: `/api/waas/deployments/${encodeURIComponent(deploymentId)}/run` });
+});
+
+// Operational read model for the deployment console. Keeping logs server-side
+// means operators can diagnose a failed job without exposing provider secrets
+// or relying on the browser's in-memory state.
+app.get("/api/waas/deployments/:id/logs", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations", "support"]), async (req: AuthenticatedRequest, res) => {
+  const workspaceId = req.workspaceId!;
+  const deploymentId = req.params.id;
+  const deployment = await readWaasRecord(workspaceId, "waas_deployments", deploymentId);
+  if (!deployment) return res.status(404).json({ error: "Deployment not found" });
+  const [stepResult, activityResult, jobResult] = await Promise.all([
+    supabaseServer.from("bos_records").select("record_id,data").match({ workspace_id: workspaceId, collection_name: "waas_deployment_steps", is_soft_deleted: false }).eq("data->>deploymentId", deploymentId).order("created_at", { ascending: true }),
+    supabaseServer.from("bos_records").select("record_id,data").match({ workspace_id: workspaceId, collection_name: "waas_activities", is_soft_deleted: false }).eq("data->>entityId", deploymentId).order("created_at", { ascending: true }),
+    supabaseServer.from("waas_deployment_jobs").select("status,attempts,worker_id,lease_expires_at,last_error,available_at,updated_at").match({ workspace_id: workspaceId, deployment_id: deploymentId }).maybeSingle(),
+  ]);
+  if (stepResult.error || activityResult.error || jobResult.error) return res.status(503).json({ error: "Deployment logs unavailable" });
+  const steps = (stepResult.data || []).map(row => ({ id: row.record_id, ...(row.data as Record<string, unknown>) }));
+  const activities = (activityResult.data || []).map(row => ({ id: row.record_id, ...(row.data as Record<string, unknown>) }));
+  return res.json({ deployment: { id: deploymentId, ...deployment }, steps, activities, job: jobResult.data || null });
+});
+
+app.post("/api/waas/deployments/:id/cancel", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations"]), async (req: AuthenticatedRequest, res) => {
+  const workspaceId = req.workspaceId!;
+  const row = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "waas_deployments", record_id: req.params.id, is_soft_deleted: false }).maybeSingle();
+  if (row.error) return res.status(503).json({ error: "Deployment unavailable" });
+  if (!row.data?.data) return res.status(404).json({ error: "Deployment not found" });
+  const deployment = row.data.data as any;
+  if (["review_required", "complete", "cancelled"].includes(String(deployment.status))) return res.status(409).json({ error: "Deployment cannot be cancelled in its current state" });
+  const now = new Date().toISOString();
+  await upsertWaasRecord(workspaceId, "waas_deployments", req.params.id, { ...deployment, status: "cancelled", cancelledAt: now, cancelledBy: req.user?.email, updatedAt: now });
+  await supabaseServer.from("waas_deployment_jobs").update({ status: "cancelled", worker_id: null, lease_expires_at: null, updated_at: now }).eq("workspace_id", workspaceId).eq("deployment_id", req.params.id);
+  await recordWaasActivity(workspaceId, "deployment_cancelled", "waas_deployment", req.params.id, {}, req.user?.email || "admin");
+  return res.json({ success: true, deploymentId: req.params.id, status: "cancelled" });
+});
+
+app.post("/api/waas/websites/:websiteId/approve", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations"]), async (req: AuthenticatedRequest, res) => {
+  const workspaceId = req.workspaceId!;
+  const row = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "waas_websites", record_id: req.params.websiteId, is_soft_deleted: false }).maybeSingle();
+  if (row.error) return res.status(503).json({ error: "Website unavailable" });
+  if (!row.data?.data) return res.status(404).json({ error: "Website not found" });
+  const website = row.data.data as any;
+  if (website.status !== "review_required" && website.status !== "customer_review") return res.status(409).json({ error: "Only a reviewed website can be approved" });
+  const now = new Date().toISOString();
+  const approved = { ...website, status: "approved", deploymentStatus: "approved", approvedAt: now, approvedBy: req.user?.email, updatedAt: now };
+  await upsertWaasRecord(workspaceId, "waas_websites", req.params.websiteId, approved);
+  if (website.orderId) {
+    const orderRow = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "waas_orders", record_id: website.orderId, is_soft_deleted: false }).maybeSingle();
+    if (orderRow.data?.data) await upsertWaasRecord(workspaceId, "waas_orders", website.orderId, { ...(orderRow.data.data as any), status: "approved", updatedAt: now });
+  }
+  await recordWaasActivity(workspaceId, "website_approved", "waas_website", req.params.websiteId, {}, req.user?.email || "admin");
+  return res.json({ success: true, website: approved });
+});
+
+app.post("/api/waas/websites/:websiteId/publish", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations"]), async (req: AuthenticatedRequest, res) => {
+  const workspaceId = req.workspaceId!;
+  const row = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "waas_websites", record_id: req.params.websiteId, is_soft_deleted: false }).maybeSingle();
+  if (row.error) return res.status(503).json({ error: "Website unavailable" });
+  if (!row.data?.data) return res.status(404).json({ error: "Website not found" });
+  const website = row.data.data as any;
+  if (website.status !== "approved") return res.status(409).json({ error: "Website requires explicit approval before publishing" });
+  if (!website.wordpressInstallationId) return res.status(409).json({ error: "WordPress installation is missing" });
+  try {
+    const health = await getHostingProvider().getWebsiteStatus(website.wordpressInstallationId);
+    if (health.status !== "ready" || health.sslStatus !== "active") return res.status(409).json({ error: "Website cannot be marked live until WordPress and SSL are healthy", health });
+    const now = new Date().toISOString();
+    const liveUrl = website.liveUrl || website.temporaryUrl;
+    const published = { ...website, status: "live", deploymentStatus: "complete", liveUrl, sslStatus: health.sslStatus, publishedAt: now, publishedBy: req.user?.email, lastHealthCheck: now, updatedAt: now };
+    await upsertWaasRecord(workspaceId, "waas_websites", req.params.websiteId, published);
+    if (website.orderId) {
+      const orderRow = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "waas_orders", record_id: website.orderId, is_soft_deleted: false }).maybeSingle();
+      if (orderRow.data?.data) await upsertWaasRecord(workspaceId, "waas_orders", website.orderId, { ...(orderRow.data.data as any), status: "live", updatedAt: now });
+    }
+    await recordWaasActivity(workspaceId, "website_published", "waas_website", req.params.websiteId, { liveUrl }, req.user?.email || "admin");
+    return res.json({ success: true, website: published });
+  } catch (error) {
+    return res.status(503).json({ error: error instanceof Error ? error.message : "Website publish verification failed" });
+  }
 });
 
 app.post("/api/webhooks/stripe", express.raw({ type: "application/json", limit: "1mb" }), async (req, res) => {
@@ -457,9 +910,20 @@ app.post("/api/webhooks/stripe", express.raw({ type: "application/json", limit: 
   catch (error: any) { return res.status(400).json({ error: `Invalid Stripe signature: ${error.message}` }); }
   try {
     const object: any = event.data.object; let metadata: any = object.metadata || {};
-    if (event.type === "invoice.payment_succeeded") metadata = object.parent?.subscription_details?.metadata || object.subscription_details?.metadata || object.metadata || {};
+    if (event.type.startsWith("invoice.")) metadata = object.parent?.subscription_details?.metadata || object.subscription_details?.metadata || object.metadata || {};
     const workspaceId = String(metadata.workspaceId || ""); const proposalId = String(metadata.proposalId || ""); const waasOrderId = String(metadata.waasOrderId || "");
-    if (workspaceId && (proposalId || waasOrderId) && workspaceId === supabaseWorkspaceId && (event.type === "checkout.session.completed" || event.type === "invoice.payment_succeeded")) {
+    const lifecycleEvents = new Set(["checkout.session.completed", "invoice.payment_succeeded", "invoice.payment_failed", "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted", "charge.refunded"]);
+    if (workspaceId && (proposalId || waasOrderId) && workspaceId === supabaseWorkspaceId && lifecycleEvents.has(event.type)) {
+      const providerEventType = event.type === "checkout.session.completed" ? "checkout.completed" : event.type === "invoice.payment_succeeded" ? "invoice.paid" : event.type === "invoice.payment_failed" ? "invoice.payment_failed" : event.type === "charge.refunded" ? "refund.created" : event.type as any;
+      const subscriptionEvent = { id: `subscription-event-${event.id}`, workspace_id: workspaceId, order_id: waasOrderId || proposalId, provider: "stripe", provider_event_id: event.id, event_type: providerEventType, status: "received", subscription_id: object.subscription || object.id || undefined, amount: Number(object.amount_paid ?? object.amount_total ?? object.amount_refunded ?? 0) / 100, currency: object.currency ? String(object.currency).toUpperCase() : undefined, payload: { type: event.type, id: event.id }, occurred_at: new Date((Number(object.created || event.created) || Math.floor(Date.now() / 1000)) * 1000).toISOString() };
+      // A received event is deliberately retryable.  Never acknowledge a
+      // duplicate until the business writes below have completed; otherwise a
+      // transient database error can permanently lose a paid event.
+      const existingEvent = await supabaseServer.from("waas_subscription_events").select("status").eq("workspace_id", workspaceId).eq("provider", "stripe").eq("provider_event_id", event.id).maybeSingle();
+      if (existingEvent.error) throw existingEvent.error;
+      if (existingEvent.data?.status === "processed") return res.json({ received: true, duplicate: true });
+      const { error: eventUpsertError } = await supabaseServer.from("waas_subscription_events").upsert({ ...subscriptionEvent, status: "received" }, { onConflict: "workspace_id,provider,provider_event_id" });
+      if (eventUpsertError) throw eventUpsertError;
       const isCheckoutPayment = event.type === "checkout.session.completed" && object.mode === "payment";
       const isSubscriptionInvoice = event.type === "invoice.payment_succeeded";
       const amountMinor = Number(isSubscriptionInvoice ? object.amount_paid : object.amount_total || 0);
@@ -472,14 +936,28 @@ app.post("/api/webhooks/stripe", express.raw({ type: "application/json", limit: 
         writes.push({ workspace_id: workspaceId, collection_name: "revenue_events", record_id: revenueId, data: { id: revenueId, workspaceId, businessUnit: "WAAS", sourceType: isSubscriptionInvoice ? "subscription" : "sale", externalId: object.id, customerName: object.customer_name || object.customer_details?.name || undefined, currency, grossRevenue: amountMinor / 100, costs: 0, fees: 0, status: "collected", occurredAt: timestamp, collectedAt: timestamp, metadata: { costsKnown: false, stripeEventId: event.id, proposalId: proposalId || undefined, waasOrderId: waasOrderId || undefined }, createdAt: timestamp }, is_soft_deleted: false, updated_at: timestamp });
       }
       if (proposalRow?.data) writes.push({ workspace_id: workspaceId, collection_name: "proposals", record_id: proposalId, data: { ...(proposalRow.data as any), status: "Paid", paymentStatus: "paid", stripeCustomerId: object.customer || undefined, stripeSubscriptionId: object.subscription || object.parent?.subscription_details?.subscription || undefined, paidAt: timestamp, updatedAt: timestamp }, is_soft_deleted: false, updated_at: timestamp });
-      if (waasOrderRow?.data) writes.push({ workspace_id: workspaceId, collection_name: "waas_orders", record_id: waasOrderId, data: { ...(waasOrderRow.data as any), status: "paid", paymentStatus: "paid", subscriptionId: object.subscription || object.parent?.subscription_details?.subscription || undefined, paidAt: timestamp, updatedAt: timestamp }, is_soft_deleted: false, updated_at: timestamp });
+      if (waasOrderRow?.data) {
+        const nextStatus = event.type === "invoice.payment_failed" ? "failed" : event.type === "customer.subscription.deleted" || event.type === "charge.refunded" ? "cancelled" : "paid";
+        const nextPaymentStatus = event.type === "charge.refunded" ? "refunded" : event.type === "invoice.payment_failed" ? "failed" : "paid";
+        writes.push({ workspace_id: workspaceId, collection_name: "waas_orders", record_id: waasOrderId, data: { ...(waasOrderRow.data as any), status: nextStatus, paymentStatus: nextPaymentStatus, subscriptionId: object.subscription || object.id || object.parent?.subscription_details?.subscription || undefined, ...(nextStatus === "paid" ? { paidAt: timestamp } : {}), updatedAt: timestamp }, is_soft_deleted: false, updated_at: timestamp });
+      }
       const { error } = await supabaseServer.from("bos_records").upsert(writes, { onConflict: "workspace_id,collection_name,record_id" }); if (error) throw error;
+      await supabaseServer.from("waas_subscription_events").update({ status: "processed" }).eq("workspace_id", workspaceId).eq("provider", "stripe").eq("provider_event_id", event.id);
+      await recordWaasActivity(workspaceId, `stripe_${event.type.replaceAll(".", "_")}`, waasOrderId ? "waas_order" : "proposal", waasOrderId || proposalId, { eventId: event.id });
     }
     return res.json({ received: true });
-  } catch (error) { console.error("Stripe webhook processing failed", error); return res.status(503).json({ error: "Webhook could not be processed" }); }
+  } catch (error) {
+    console.error("Stripe webhook processing failed", error);
+    // Stripe must retry while the event remains unprocessed.  Marking the
+    // durable event failed preserves the diagnostic without acknowledging it.
+    try {
+      const object: any = event.data.object;
+      const metadata: any = object.metadata || object.parent?.subscription_details?.metadata || {};
+      if (metadata.workspaceId && event.id) await supabaseServer.from("waas_subscription_events").update({ status: "failed" }).eq("workspace_id", String(metadata.workspaceId)).eq("provider", "stripe").eq("provider_event_id", event.id);
+    } catch (persistError) { console.error("Stripe webhook failure state could not be persisted", persistError); }
+    return res.status(503).json({ error: "Webhook could not be processed" });
+  }
 });
-
-app.use(express.json({ limit: "2mb" }));
 
 app.get("/healthz", (_req, res) => res.status(200).json({ status: "alive", timestamp: new Date().toISOString() }));
 app.get("/readyz", (_req, res) => {
@@ -636,7 +1114,7 @@ app.post("/api/outreach/process-due", authenticateUser, requireWorkspace(), requ
 
 // Vercel Cron invokes this endpoint without a user session. Keep it fail-closed
 // behind CRON_SECRET and process only the configured workspace.
-app.post("/api/cron/outreach", async (req, res) => {
+app.all("/api/cron/outreach", async (req, res) => {
   const expected = String(process.env.CRON_SECRET || "");
   const supplied = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
   if (!expected || supplied !== expected) return res.status(401).json({ error: "Unauthorized" });
@@ -646,6 +1124,32 @@ app.post("/api/cron/outreach", async (req, res) => {
     console.error("Scheduled outreach processing failed", error);
     return res.status(503).json({ error: "Scheduled outreach could not be processed" });
   }
+});
+
+// Vercel Cron claims a small batch of queued WAAS deployments and starts the
+// same idempotent runner used by the admin UI. The runner persists each step,
+// so a timeout or retry resumes safely rather than duplicating completed work.
+app.all("/api/cron/waas-deployments", async (req, res) => {
+  const expected = String(process.env.CRON_SECRET || "");
+  const supplied = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  if (!expected || supplied !== expected) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const now = new Date().toISOString();
+    const { data: rows, error } = await supabaseServer.from("waas_deployment_jobs").select("deployment_id,status,lease_expires_at").eq("workspace_id", supabaseWorkspaceId).or(`status.eq.queued,lease_expires_at.lt.${now}`).order("created_at", { ascending: true }).limit(1);
+    if (error) throw error;
+    const baseUrl = process.env.PUBLIC_APP_URL || "https://admin.bennietay.com";
+    const results = [];
+    for (const row of rows || []) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), Number(process.env.WAAS_CRON_RUN_TIMEOUT_MS || 240000));
+      try {
+        const response = await fetch(`${baseUrl}/api/waas/deployments/${encodeURIComponent(row.deployment_id)}/run`, { method: "POST", headers: { Authorization: `Bearer ${expected}`, "x-workspace-id": supabaseWorkspaceId, "x-request-id": `cron-waas-${row.deployment_id}` }, signal: controller.signal });
+        results.push({ deploymentId: row.deployment_id, status: response.status });
+      } catch (runError) { results.push({ deploymentId: row.deployment_id, status: "error", error: runError instanceof Error ? runError.message : "runner unavailable" }); }
+      finally { clearTimeout(timer); }
+    }
+    return res.json({ success: true, claimed: results.length, results });
+  } catch (error) { console.error("Scheduled WAAS deployment processing failed", error); return res.status(503).json({ error: "Scheduled WAAS deployments could not be processed" }); }
 });
 
 app.get("/api/outreach/opt-out", async (req, res) => {

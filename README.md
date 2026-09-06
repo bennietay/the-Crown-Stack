@@ -76,14 +76,13 @@ The storefront order contract is `POST /api/integrations/waas/orders` with the
 server-only `X-WAAS-Ingest-Key` header (`WAAS_INGEST_API_KEY`). It is validated
 with Zod and idempotent by order id/external id. Admin deployment is
 `POST /api/waas/orders/:id/deploy`; it is authenticated, workspace-scoped and
-currently uses a safe mock Hostinger provider. No provider credentials are
-invented or exposed to the browser. Replace `src/server/hostingerProvider.ts`
-with a real server-side Hostinger adapter when the account API contract and
-credentials are available.
+uses a safe mock Hostinger provider only in non-production environments. A
+production process refuses to deploy unless Hostinger is configured. Provider
+credentials never reach the browser.
 
-The WAAS console seeds configurable Launch/Business plans and a template
-library covering the initial niches and Modern style when the workspace is
-empty. Templates store structured section configuration (for example H02,
+Plans and templates are workspace data and must be initialized deliberately by
+an administrator or controlled migration; opening the UI never writes sample
+commercial data. Templates store structured section configuration (for example H02,
 S03, A01, T02, F01, C03, CT01), so new styles, niches and versions can be
 added as data rather than new page implementations. Deployment is intentionally
 review-gated: the mock adapter reaches `review_required`, never automatically
@@ -95,15 +94,107 @@ The same server-to-server key protects `POST /api/integrations/waas/onboarding`,
 customer-portal contracts for onboarding, status polling, and support.
 
 Hostinger provisioning is implemented behind `src/server/hostingerProvider.ts`.
-Set `HOSTINGER_API_TOKEN` to enable the real provider; also configure
-`HOSTINGER_ORDER_ID` (and optionally `HOSTINGER_DATACENTER_CODE`) because the
-Hostinger website-create API requires a hosting order and a customer domain.
+Set `HOSTINGER_API_TOKEN`, `HOSTINGER_USERNAME`, `HOSTINGER_ORDER_ID`, and
+`HOSTINGER_WP_ADMIN_EMAIL` to enable the real provider. A unique random login
+and password are generated for every deployment and encrypted with
+`CREDENTIAL_ENCRYPTION_KEY`; operators reveal them only through the audited,
+no-store WordPress-access action. The adapter uses Hostinger's website-create and
+WordPress installation/theme/plugin endpoints, and polls the documented
+installation list until WordPress is ready. `HOSTINGER_DATACENTER_CODE` is
+optional after the first website on an account. For the included managed
+themes and connector, the server requests a scoped Hostinger upload URL,
+uploads the package files into WordPress, calls the documented theme/plugin
+deploy endpoints, and polls until activation is confirmed.
+`HOSTINGER_THEME_PATH` and `HOSTINGER_PLUGIN_PATH` are optional overrides for
+packages that an operator has already staged on the target website.
 Without the token, deployments remain in safe mock mode. Real provisioning still
 ends at `review_required` and never publishes automatically.
 
-The initial WordPress connector contract lives in
+The WordPress connector contract lives in
 `wordpress-plugin/bennietay-managed-connector/`. Define
-`BENNIETAY_CONNECTOR_SECRET` in the WordPress installation and send an
-`X-BennieTay-Signature` HMAC-SHA256 header for protected `/config` and `/lead`
-requests. The public `/health` endpoint exposes only non-sensitive version and
-site information.
+`BENNIETAY_WEBSITE_ID`, `BENNIETAY_ADMIN_API_URL`, and a site-specific
+`BENNIETAY_CONNECTOR_SECRET` in its generated `site-config.php`. The site secret is
+`HMAC-SHA256(WAAS_CONNECTOR_INGEST_SECRET, "website:" + websiteId)`; the master
+secret stays only on the admin server. Outbound lead requests include a signed
+timestamp, are idempotent, and remain in the WordPress outbox until the admin
+API acknowledges them. The public `/health` endpoint exposes only
+non-sensitive version/site information and pending outbox count.
+
+### WAAS P0/P1 operations
+
+The deployment adapter exposes WordPress, theme, plugin and domain operations
+behind `HostingProvider`. Mock mode is safe for development; real mode uses
+the Hostinger variables above plus `HOSTINGER_TIMEOUT_MS`,
+`HOSTINGER_POLL_ATTEMPTS`, and `HOSTINGER_POLL_INTERVAL_MS`. Real calls have
+bounded timeouts, retries and asynchronous-install polling.
+
+Deployments persist each step, skip completed steps on resume, record failed
+steps and expose `POST /api/waas/deployments/:id/retry`. The legacy
+`POST /api/waas/orders/:id/deploy` endpoint now only queues the same durable
+deployment job; it no longer provisions a website through a bypass path. Set
+`WAAS_MOCK_FAIL_STEP` in a test environment to intentionally fail a mock step.
+A human review gate remains required before publishing.
+
+Queued WAAS deployments are represented in the typed
+`waas_deployment_jobs` table. An atomic claim and expiring lease prevent double
+provisioning and allow a crashed worker to resume without repeating completed
+steps. They can also be processed by the free-tier-compatible daily Vercel Cron
+through `/api/cron/waas-deployments`. The endpoint is protected by
+`CRON_SECRET`, claims one queued/expired deployment per run, and calls the same
+resumable runner used by the admin UI. Set
+`WAAS_CRON_RUN_TIMEOUT_MS` to tune the per-job request timeout.
+
+Installable starter themes are included in `wordpress-themes/`:
+`bennietay-launch` and `bennietay-business`. They use lightweight CSS/vanilla
+JS interactions and respect `prefers-reduced-motion`.
+
+Secured storefront contracts now support customer create/update, payment
+updates with event idempotency, ticket messages and message listing. Admin
+replies use `POST /api/waas/tickets/:ticketId/messages`. Included update usage
+is enforced through `POST /api/waas/websites/:websiteId/update-usage`.
+
+P1 operational controls add typed `waas_assets`, `waas_subscription_events`,
+and `waas_ticket_sla` tables with workspace RLS. The private `waas-assets`
+Storage bucket accepts only approved image/PDF types up to 10 MB. Storefronts
+request a signed upload URL through `POST
+/api/integrations/waas/assets/upload-url`, upload directly to Storage, then
+call `POST /api/integrations/waas/assets/:assetId/complete`. Stripe lifecycle
+events are idempotently recorded for checkout, invoices, subscriptions and
+refunds. Ticket creation creates response/resolution deadlines and the admin
+ticket update route records resolution and activity events.
+
+Migration `supabase/migrations/202609060002_waas_integrity_and_operations.sql`
+adds a unique workspace/collection/record key and indexes for ticket messages,
+update usage and activity records. Apply it in a controlled release after
+checking existing duplicate rows.
+
+P2 hardening adds server-side checksum and byte-size verification before an
+asset becomes `ready`; the server downloads the private object and compares it
+to the declared SHA-256 metadata. The authenticated
+`GET /api/waas/tickets/sla` endpoint exposes current response/resolution breach
+state to the operations UI, where tickets now show a visible SLA deadline or
+breach state. The related migration files are
+`202609060003_waas_operational_integrity.sql` and
+`202609060004_waas_asset_storage.sql`.
+
+### WAAS operator runbook (P2/P3)
+
+Use **WAAS → Deployments → View logs** to inspect every persisted step, provider
+error, retry attempt and activity event. A failed job must be retried from the
+failed step; completed provider operations are retained and are not replayed.
+Use **Cancel** only for queued/running work, then verify the provider account
+before creating a replacement order. Publish remains a deliberate two-step
+operation: review the preview, approve it, then publish.
+
+For a customer cancellation, first stop the Stripe subscription, export the
+customer onboarding/assets, take a final WordPress backup, and record the
+handover/domain details in the activity timeline. Do not delete a customer or
+template that is referenced by a live site; deactivate it instead. Restore a
+site by provisioning a disposable Hostinger target, importing the latest backup,
+validating forms/SSL, and switching DNS only after review.
+
+The connector outbox is durable and retried by WordPress cron. Operators should
+monitor the deployment console and the lead/API error logs daily; a non-zero
+pending outbox or a breached SLA is an operational alert, not a successful
+delivery. Production must set `HOSTINGER_MOCK_MODE=false`, a unique
+`WAAS_CONNECTOR_INGEST_SECRET`, and the Hostinger username/email variables.

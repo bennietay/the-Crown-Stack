@@ -302,7 +302,7 @@ export interface ActivityRecord {
 // contracts without changing Amway data.
 export type WaasProductType = "launch" | "business";
 export type WaasOrderStatus = "pending_payment" | "paid" | "awaiting_onboarding" | "onboarding_in_progress" | "ready_for_deployment" | "deploying" | "review_required" | "customer_review" | "approved" | "live" | "cancelled" | "failed";
-export type WaasWebsiteStatus = "onboarding" | "queued" | "deploying" | "review_required" | "customer_review" | "live" | "suspended" | "failed";
+export type WaasWebsiteStatus = "onboarding" | "queued" | "deploying" | "review_required" | "customer_review" | "approved" | "live" | "suspended" | "failed";
 export type WaasDeploymentStatus = "queued" | "running" | "waiting" | "failed" | "review_required" | "complete" | "cancelled";
 export type WaasTicketStatus = "new" | "open" | "in_progress" | "waiting_for_customer" | "resolved" | "closed";
 export interface WaasPlan { id: string; workspaceId: string; name: string; productType: WaasProductType; setupFee: number; recurringFee: number; billingInterval: "month" | "year" | "one_time"; pagesIncluded: number; updateAllowance: number; supportSlaHours: number; features: string[]; currency: string; active: boolean; createdAt: string; updatedAt: string; }
@@ -313,6 +313,8 @@ export interface WaasWebsite { id: string; workspaceId: string; customerId?: str
 export interface WaasDeploymentStep { id: string; workspaceId: string; deploymentId: string; name: string; status: "queued" | "running" | "complete" | "failed" | "skipped"; startedAt?: string; completedAt?: string; logs?: string[]; errorMessage?: string; retryCount: number; }
 export interface WaasDeployment { id: string; workspaceId: string; orderId?: string; websiteId?: string; status: WaasDeploymentStatus; currentStep?: string; provider: "hostinger" | "mock"; approvedAt?: string; startedAt?: string; completedAt?: string; errorMessage?: string; createdAt: string; updatedAt: string; }
 export interface WaasSupportTicket { id: string; workspaceId: string; ticketNumber: string; customerId?: string; websiteId?: string; orderId?: string; subject: string; description: string; category: "content_update" | "technical_issue" | "website_down" | "domain_dns" | "form_lead" | "email" | "billing" | "seo" | "feature_request" | "general"; priority: "critical" | "high" | "normal" | "request"; status: WaasTicketStatus; assignedTo?: string; source: "admin" | "customer_portal" | "connector"; slaDueAt?: string; updateClassification?: "included" | "chargeable" | "not_an_update" | "requires_upgrade"; createdAt: string; updatedAt: string; }
+export interface WaasTicketMessage { id: string; workspaceId: string; ticketId: string; authorType: "customer" | "admin" | "connector"; authorId?: string; body: string; internal: boolean; createdAt: string; }
+export interface WaasUpdateUsage { id: string; workspaceId: string; websiteId: string; ticketId?: string; periodStart: string; periodEnd: string; allowance: number; used: number; classification: "included" | "chargeable" | "not_an_update" | "requires_upgrade"; createdAt: string; updatedAt: string; }
 export interface WaasActivity { id: string; workspaceId: string; actor: string; action: string; entityType: string; entityId?: string; metadata?: Record<string, unknown>; createdAt: string; }
 
 export interface AffiliateRecord {

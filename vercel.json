@@ -6,11 +6,12 @@
   "framework": null,
   "functions": {
     "api/index.ts": {
-      "includeFiles": "dist/**"
+      "includeFiles": "{dist,wordpress-themes,wordpress-plugin}/**"
     }
   },
   "crons": [
-    { "path": "/api/cron/outreach", "schedule": "0 1 * * *" }
+    { "path": "/api/cron/outreach", "schedule": "0 1 * * *" },
+    { "path": "/api/cron/waas-deployments", "schedule": "0 2 * * *" }
   ],
   "rewrites": [
     { "source": "/healthz", "destination": "/api/index" },

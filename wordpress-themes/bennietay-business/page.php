@@ -1,0 +1,1 @@
+<?php get_header(); ?><main id="content" class="bt-section"><div class="bt-wrap bt-reveal"><?php while(have_posts()):the_post(); ?><p class="bt-kicker"><?php bloginfo('name'); ?></p><h1><?php the_title(); ?></h1><div class="bt-content"><?php the_content(); ?></div><?php endwhile; ?></div></main><?php get_footer(); ?>

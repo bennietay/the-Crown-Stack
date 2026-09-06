@@ -63,7 +63,21 @@ test("Stripe Checkout uses persisted proposal totals and verifies raw webhooks",
   assert.match(server, /Number\(proposal\.totalMRC \|\| 0\)/);
   assert.match(server, /checkout\.sessions\.create/);
   assert.doesNotMatch(server, /unit_amount:\s*req\.body/);
-  assert.ok(server.indexOf('app.post("/api/webhooks/stripe"') < server.indexOf('app.use(express.json'));
+  assert.match(server, /req\.path === "\/api\/webhooks\/stripe" \? next\(\) : jsonBodyParser/);
+  assert.ok(server.indexOf("const jsonBodyParser") < server.indexOf('app.post("/api/integrations/waas/orders"'));
+  assert.match(server, /idempotencyKey: `waas-checkout-/);
+  assert.match(server, /status === "processed"/);
+  assert.match(server, /status: "failed"/);
+});
+
+test("WAAS P0 boundaries are fail-closed", () => {
+  const migration = read("supabase/migrations/20260907120000_waas_p0_security.sql");
+  const server = read("server.ts");
+  assert.match(migration, /revoke all on function public\.record_waas_update_usage.*anon, authenticated/s);
+  assert.match(migration, /grant execute on function public\.record_waas_update_usage.*service_role/s);
+  assert.match(server, /app\.post\("\/api\/integrations\/waas\/leads"/);
+  assert.match(server, /providerKind === "hostinger"/);
+  assert.match(server, /Website is not ready for review/);
 });
 
 test("expanded production API remains fail-closed", () => {
