@@ -401,6 +401,15 @@ app.post("/api/integrations/waas/orders", async (req, res) => {
 
 function validWaasKey(req: express.Request) { const supplied = String(req.headers["x-waas-ingest-key"] || ""); return Boolean(process.env.WAAS_INGEST_API_KEY && supplied === process.env.WAAS_INGEST_API_KEY); }
 
+function validPortalToken(orderId: string, token: string) {
+  const secret = String(process.env.WAAS_PORTAL_SECRET || "");
+  if (!secret || !token) return false;
+  const expected = crypto.createHmac("sha256", secret).update(`order:${orderId}`).digest("hex");
+  const actual = Buffer.from(token);
+  const expectedBuffer = Buffer.from(expected);
+  return actual.length === expectedBuffer.length && crypto.timingSafeEqual(actual, expectedBuffer);
+}
+
 function validConnectorSignature(req: express.Request) {
   const masterSecret = String(process.env.WAAS_CONNECTOR_INGEST_SECRET || "");
   const websiteId = typeof req.body?.websiteId === "string" ? req.body.websiteId.trim() : "";
@@ -535,6 +544,48 @@ app.get("/api/integrations/waas/orders/:id/status", async (req, res) => {
   if (error) return res.status(503).json({ error: "Status unavailable" }); if (!row?.data) return res.status(404).json({ error: "Order not found" });
   const order = row.data as any; const websiteRow = order.websiteId ? await supabaseServer.from("bos_records").select("data").match({ workspace_id: supabaseWorkspaceId, collection_name: "waas_websites", record_id: order.websiteId, is_soft_deleted: false }).maybeSingle() : { data: null } as any;
   return res.json({ order, website: websiteRow.data?.data || null });
+});
+
+app.get("/api/integrations/waas/catalog", async (_req, res) => {
+  try {
+    const { data, error } = await supabaseServer.from("bos_records").select("collection_name,record_id,data").eq("workspace_id", supabaseWorkspaceId).in("collection_name", ["waas_plans", "waas_templates"]).eq("is_soft_deleted", false).limit(200);
+    if (error) throw error;
+    const rows = (data || []).map(row => ({ id: row.record_id, collection: row.collection_name, ...(row.data || {}) })).filter(row => row.active !== false && row.status !== "inactive");
+    return res.json({ plans: rows.filter(row => row.collection === "waas_plans"), templates: rows.filter(row => row.collection === "waas_templates").map(({ configuration: _configuration, ...template }) => template) });
+  } catch (error) { console.error("WAAS catalogue lookup failed", error); return res.status(503).json({ error: "Catalogue is temporarily unavailable" }); }
+});
+
+// Customer portal contract. The standalone storefront should mint a portal
+// token server-side using WAAS_PORTAL_SECRET; the secret is never sent to the
+// browser. Tokens are order-scoped and only return customer-safe fields.
+app.get("/api/portal/orders/:id", async (req, res) => {
+  if (!validPortalToken(req.params.id, String(req.query.token || ""))) return res.status(401).json({ error: "Invalid portal token" });
+  try {
+    const order = await readWaasRecord(supabaseWorkspaceId, "waas_orders", req.params.id);
+    if (!order) return res.status(404).json({ error: "Order not found" });
+    const website = order.websiteId ? await readWaasRecord(supabaseWorkspaceId, "waas_websites", String(order.websiteId)) : undefined;
+    const { data: ticketRows, error: ticketError } = await supabaseServer.from("bos_records").select("record_id,data").match({ workspace_id: supabaseWorkspaceId, collection_name: "waas_support_tickets", is_soft_deleted: false }).eq("data->>orderId", req.params.id).order("updated_at", { ascending: false }).limit(50);
+    if (ticketError) throw ticketError;
+    return res.json({ order: { id: order.id, status: order.status, paymentStatus: order.paymentStatus, productType: order.productType, niche: order.niche, style: order.style, createdAt: order.createdAt, updatedAt: order.updatedAt }, website: website ? { id: website.id, domain: website.domain, temporaryUrl: website.temporaryUrl, liveUrl: website.liveUrl, status: website.status, deploymentStatus: website.deploymentStatus, lastHealthCheck: website.lastHealthCheck } : null, tickets: (ticketRows || []).map(row => ({ id: row.record_id, ...(row.data || {}) })) });
+  } catch (error) { console.error("Portal order lookup failed", error); return res.status(503).json({ error: "Portal data is temporarily unavailable" }); }
+});
+
+app.post("/api/portal/orders/:id/tickets", async (req, res) => {
+  if (!validPortalToken(req.params.id, String(req.query.token || ""))) return res.status(401).json({ error: "Invalid portal token" });
+  try {
+    const parsed = waasTicketSchema.parse({ ...req.body, orderId: req.params.id });
+    const order = await readWaasRecord(supabaseWorkspaceId, "waas_orders", req.params.id);
+    if (!order) return res.status(404).json({ error: "Order not found" });
+    const ticketId = parsed.id || `portal-ticket-${crypto.createHash("sha256").update(`${req.params.id}:${parsed.subject}:${parsed.description}`).digest("hex").slice(0, 32)}`;
+    const existing = await readWaasRecord(supabaseWorkspaceId, "waas_support_tickets", ticketId);
+    if (existing) return res.json({ success: true, duplicate: true, ticket: existing });
+    const now = new Date(); const nowIso = now.toISOString(); const ticket = { ...parsed, id: ticketId, customerId: order.customerId, workspaceId: supabaseWorkspaceId, ticketNumber: `WAAS-${Date.now().toString().slice(-6)}-${crypto.randomBytes(2).toString("hex").toUpperCase()}`, source: "customer_portal", status: "new", createdAt: nowIso, updatedAt: nowIso };
+    await upsertWaasRecord(supabaseWorkspaceId, "waas_support_tickets", ticketId, ticket);
+    const deadlines = slaDeadline(parsed.priority, now);
+    await supabaseServer.from("waas_ticket_sla").upsert({ id: `sla-${ticketId}`, workspace_id: supabaseWorkspaceId, ticket_id: ticketId, priority: parsed.priority, response_due_at: deadlines.responseDueAt, resolution_due_at: deadlines.resolutionDueAt, updated_at: nowIso }, { onConflict: "workspace_id,ticket_id" });
+    await recordWaasActivity(supabaseWorkspaceId, "ticket_created", "waas_ticket", ticketId, { priority: parsed.priority, category: parsed.category }, "customer_portal");
+    return res.status(201).json({ success: true, ticket, sla: deadlines });
+  } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid support ticket", details: error.issues }); return res.status(503).json({ error: "Support ticket could not be created" }); }
 });
 
 // Create a real Stripe Checkout session for a WAAS order. Orders remain
@@ -979,6 +1030,19 @@ app.get("/readyz", (_req, res) => {
   };
   const ready = Object.values(checks).every(Boolean);
   res.status(ready ? 200 : 503).json({ status: ready ? "ready" : "not_ready", checks, environment: isProduction ? "production" : "development" });
+});
+
+app.get("/api/ops/monitoring", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations", "support"]), async (req: AuthenticatedRequest, res) => {
+  try {
+    const [deployments, tickets, sla] = await Promise.all([
+      supabaseServer.from("bos_records").select("data").match({ workspace_id: req.workspaceId, collection_name: "waas_deployments", is_soft_deleted: false }).limit(500),
+      supabaseServer.from("bos_records").select("data").match({ workspace_id: req.workspaceId, collection_name: "waas_support_tickets", is_soft_deleted: false }).limit(500),
+      supabaseServer.from("waas_ticket_sla").select("response_breached,resolution_breached").eq("workspace_id", req.workspaceId).limit(500),
+    ]);
+    if (deployments.error || tickets.error || sla.error) throw deployments.error || tickets.error || sla.error;
+    const deploymentRows = deployments.data || []; const ticketRows = tickets.data || []; const slaRows = sla.data || [];
+    return res.json({ timestamp: new Date().toISOString(), integrations: integrationStatus(), deployments: { queued: deploymentRows.filter(row => ["queued", "running", "waiting"].includes(String((row.data as any)?.status))).length, failed: deploymentRows.filter(row => (row.data as any)?.status === "failed").length, review: deploymentRows.filter(row => (row.data as any)?.status === "review_required").length }, support: { open: ticketRows.filter(row => !["resolved", "closed"].includes(String((row.data as any)?.status))).length, critical: ticketRows.filter(row => ["critical", "high"].includes(String((row.data as any)?.priority)) && !["resolved", "closed"].includes(String((row.data as any)?.status))).length, breached: slaRows.filter(row => row.response_breached || row.resolution_breached).length } });
+  } catch (error) { console.error("Operations monitoring failed", error); return res.status(503).json({ error: "Monitoring data unavailable" }); }
 });
 
 app.post("/api/bootstrap", authenticateUser, async (req: AuthenticatedRequest, res) => {

@@ -43,9 +43,19 @@ PUBLIC_WHATSAPP_URL=https://wa.me/<international-number>
 PUBLIC_BOOKING_URL=
 PUBLIC_PRIVACY_URL=
 PUBLIC_TERMS_URL=
+WAAS_PORTAL_SECRET=<long-random-server-only-secret>
 ```
 
 Do not enter service secrets in the browser or commit them to Git. The WhatsApp API remains intentionally unconfigured; click-to-chat is the free-first channel.
+
+The public `/sales` route is a standalone WAAS sales front end. It reads the
+active catalogue through `GET /api/integrations/waas/catalog` and records
+qualified requests through the durable lead-capture path. The `/portal` route
+is a token-scoped customer portal: the storefront mints an order token as
+`HMAC-SHA256(WAAS_PORTAL_SECRET, "order:" + orderId)` server-side and passes
+it in the portal URL. The portal can read safe order/site status and create
+support tickets without exposing the ingest key. Operations monitoring is
+available to staff at `GET /api/ops/monitoring`.
 
 Vite embeds every `VITE_*` value at build time. Never expose a Supabase service-role key in browser code; the publishable key is protected by RLS. For a production Vercel release, deploy the source with `vercel deploy --prod` so the cloud Production variables are used.
 

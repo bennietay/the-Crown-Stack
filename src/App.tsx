@@ -53,6 +53,8 @@ const Analytics = lazyWithChunkRecovery(() => import("./pages/Analytics").then(m
 const OperationsControl = lazyWithChunkRecovery(() => import("./pages/OperationsControl").then(module => ({ default: module.OperationsControl })), "operations-control");
 const DailyBrief = lazyWithChunkRecovery(() => import("./pages/DailyBrief").then(module => ({ default: module.DailyBrief })), "daily-brief");
 const WaasOperations = lazyWithChunkRecovery(() => import("./pages/WaasOperations").then(module => ({ default: module.WaasOperations })), "waas-operations");
+const WaasSales = lazyWithChunkRecovery(() => import("./pages/WaasSales").then(module => ({ default: module.WaasSales })), "waas-sales");
+const WaasPortal = lazyWithChunkRecovery(() => import("./pages/WaasPortal").then(module => ({ default: module.WaasPortal })), "waas-portal");
 
 const ADMIN: Role[] = ["super_admin", "workspace_admin"];
 const SALES: Role[] = [...ADMIN, "sales"];
@@ -105,6 +107,8 @@ function ApplicationRoutes() {
   const clearError = useAuthStore(state => state.clearError);
 
   if (pathname === "/capture") return <LeadCapture />;
+  if (pathname === "/sales") return <WaasSales />;
+  if (pathname === "/portal") return <WaasPortal />;
   if (pathname.startsWith("/p/")) return <ProposalView />;
 
   if (loading) return <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm font-medium text-slate-500">Loading application…</div>;

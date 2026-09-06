@@ -76,6 +76,18 @@ describe("WAAS architecture", () => {
     assert.ok(fs.existsSync(path.join(process.cwd(), "wordpress-themes/bennietay-business/assets/enhancements.css")));
   });
 
+  it("standalone sales and customer portal paths are secured and wired", () => {
+    const app = fs.readFileSync(path.join(process.cwd(), "src/App.tsx"), "utf8");
+    const server = fs.readFileSync(path.join(process.cwd(), "server.ts"), "utf8");
+    assert.match(app, /pathname === "\/sales"/);
+    assert.match(app, /pathname === "\/portal"/);
+    assert.match(server, /\/api\/integrations\/waas\/catalog/);
+    assert.match(server, /\/api\/portal\/orders\/:id/);
+    assert.match(server, /WAAS_PORTAL_SECRET/);
+    assert.match(server, /timingSafeEqual/);
+    assert.match(server, /\/api\/ops\/monitoring/);
+  });
+
   it("queued deployments have a protected cron runner", () => {
     const server = fs.readFileSync(path.join(process.cwd(), "server.ts"), "utf8");
     const vercel = fs.readFileSync(path.join(process.cwd(), "vercel.json"), "utf8");
