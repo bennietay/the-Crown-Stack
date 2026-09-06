@@ -1030,6 +1030,7 @@ app.get("/readyz", (_req, res) => {
     liveMode: !isProduction || appMode === "live",
     waasIngest: !isProduction || Boolean(process.env.WAAS_INGEST_API_KEY),
     connectorSecret: !isProduction || Boolean(process.env.WAAS_CONNECTOR_INGEST_SECRET),
+    portalSecret: !isProduction || Boolean(process.env.WAAS_PORTAL_SECRET),
   };
   const ready = Object.values(checks).every(Boolean);
   res.status(ready ? 200 : 503).json({ status: ready ? "ready" : "not_ready", checks, environment: isProduction ? "production" : "development" });
