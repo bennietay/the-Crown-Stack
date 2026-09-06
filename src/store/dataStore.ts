@@ -59,7 +59,7 @@ const makeId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const collectionState: Record<string, string> = { leads: 'leads', opportunities: 'opportunities', customers: 'customers', tickets: 'tickets', products: 'products', proposals: 'proposals', tasks: 'tasks', diamondProspects: 'diamond_prospects', diamondCustomers: 'diamond_customers', diamondFollowUps: 'diamond_followups', diamondProducts: 'diamond_products', diamondPurchases: 'diamond_purchases', diamondScripts: 'diamond_scripts', revenueEvents: 'revenue_events', revenueGoals: 'revenue_goals', moneyTasks: 'money_tasks', notifications: 'notifications', automations: 'automations', activityRecords: 'activity_records', waasPlans: 'waas_plans', waasTemplates: 'waas_templates', waasOrders: 'waas_orders', waasOnboardings: 'waas_onboardings', waasWebsites: 'waas_websites', waasDeployments: 'waas_deployments', waasDeploymentSteps: 'waas_deployment_steps', waasSupportTickets: 'waas_support_tickets', waasTicketMessages: 'waas_ticket_messages', waasUpdateUsage: 'waas_update_usage', waasActivities: 'waas_activities' };
 
 async function listCollection(workspaceId: string, collectionName: string) {
-  const { data, error } = await supabase.from('bos_records').select('record_id,data').eq('workspace_id', workspaceId).eq('collection_name', collectionName).eq('is_soft_deleted', false);
+  const { data, error } = await supabase.from('bos_records').select('record_id,data').eq('workspace_id', workspaceId).eq('collection_name', collectionName).eq('is_soft_deleted', false).order('updated_at', { ascending: false }).range(0, 1999);
   if (error) throw error;
   return (data || []).map(row => ({ id: row.record_id, ...(row.data || {}) }));
 }
@@ -80,14 +80,18 @@ export const useDataStore = create<DataState>((set, get) => ({
   initWorkspace: (workspaceId) => {
     set({ loading: true, activeWorkspaceId: workspaceId });
     let cancelled = false;
-    void Promise.all(Object.entries(collectionState).map(async ([stateKey, collectionName]) => {
-      try {
-        const rows = await listCollection(workspaceId, collectionName);
-        if (!cancelled) set({ [stateKey]: rows } as Partial<DataState>);
-      } catch (error) { console.error(`Error fetching ${collectionName}:`, error); }
-    })).finally(() => { if (!cancelled) set({ loading: false }); });
+    const loadCollections = async () => {
+      await Promise.all(Object.entries(collectionState).map(async ([stateKey, collectionName]) => {
+        try {
+          const rows = await listCollection(workspaceId, collectionName);
+          if (!cancelled) set({ [stateKey]: rows } as Partial<DataState>);
+        } catch (error) { console.error(`Error fetching ${collectionName}:`, error); }
+      }));
+      if (!cancelled) set({ loading: false });
+    };
+    void loadCollections();
     const channel = supabase.channel(`bos-records-${workspaceId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'bos_records', filter: `workspace_id=eq.${workspaceId}` }, () => {
-      void get().initWorkspace(workspaceId)();
+      void loadCollections();
     }).subscribe();
     return () => { cancelled = true; void supabase.removeChannel(channel); };
   },

@@ -36,8 +36,8 @@ export const businessTopology = businessContexts.filter(context => context.id !=
 /** Routes that are valid while a business workspace is active. Portfolio is intentionally summary-only. */
 export const businessRouteMap: Record<BusinessContext, string[]> = {
   all: ["/"],
-  waas: ["/waas", "/leads", "/pipeline", "/proposals", "/products", "/customers", "/tickets"],
-  amway: ["/diamond"],
+  waas: ["/waas", "/leads", "/pipeline", "/proposals", "/products", "/customers", "/tickets", "/settings", "/activity", "/automations", "/notifications"],
+  amway: ["/diamond", "/settings", "/activity", "/automations", "/notifications"],
 };
 
 export function businessOwnsRoute(business: BusinessContext, pathname: string) {

@@ -142,7 +142,9 @@ steps. They can also be processed by the free-tier-compatible daily Vercel Cron
 through `/api/cron/waas-deployments`. The endpoint is protected by
 `CRON_SECRET`, claims one queued/expired deployment per run, and calls the same
 resumable runner used by the admin UI. Set
-`WAAS_CRON_RUN_TIMEOUT_MS` to tune the per-job request timeout.
+`WAAS_CRON_RUN_TIMEOUT_MS` to tune the per-job request timeout. The free-tier
+cron claims up to five jobs per run; each job remains resumable if a request
+times out.
 
 Installable starter themes are included in `wordpress-themes/`:
 `bennietay-launch` and `bennietay-business`. They use lightweight CSS/vanilla
@@ -196,5 +198,12 @@ validating forms/SSL, and switching DNS only after review.
 The connector outbox is durable and retried by WordPress cron. Operators should
 monitor the deployment console and the lead/API error logs daily; a non-zero
 pending outbox or a breached SLA is an operational alert, not a successful
-delivery. Production must set `HOSTINGER_MOCK_MODE=false`, a unique
-`WAAS_CONNECTOR_INGEST_SECRET`, and the Hostinger username/email variables.
+delivery. Production provider selection is token-based: set
+`HOSTINGER_API_TOKEN`, a unique `WAAS_CONNECTOR_INGEST_SECRET`,
+`WAAS_INGEST_API_KEY`, and the Hostinger username/email variables. The API
+refuses to report ready until the two WAAS ingest secrets are present.
+
+Before accepting a customer, configure Supabase database/Storage backups and
+test a disposable restoration. Vercel runtime logs are useful for diagnosis,
+but they are not a substitute for alerting; configure an error alert channel
+for deployment failures, connector outbox failures, and support SLA breaches.

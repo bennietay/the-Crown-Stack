@@ -93,6 +93,23 @@ test("WAAS P1 operational guardrails are wired", () => {
   assert.match(page, /customerId/);
 });
 
+test("P2 workspace operations do not create realtime subscription loops", () => {
+  const store = read("src/store/dataStore.ts");
+  const business = read("src/store/businessStore.ts");
+  assert.match(store, /void loadCollections\(\)/);
+  assert.doesNotMatch(store, /get\(\)\.initWorkspace\(workspaceId\)\(\)/);
+  assert.match(store, /range\(0, 1999\)/);
+  assert.match(business, /waas: \[.*\/settings/s);
+});
+
+test("P2 catalogue administration is available without source changes", () => {
+  const page = read("src/pages/WaasOperations.tsx");
+  assert.match(page, /Create WAAS plan/);
+  assert.match(page, /Create WAAS template/);
+  assert.match(page, /addWaasPlan/);
+  assert.match(page, /addWaasTemplate/);
+});
+
 test("expanded production API remains fail-closed", () => {
   const server = read("server.ts");
   assert.match(server, /\/api\/ai\/daily-brief/);
