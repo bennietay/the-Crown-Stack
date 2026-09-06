@@ -334,6 +334,8 @@ const acceptanceLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, keyGene
 const waasOrderSchema = z.object({
   id: z.string().trim().max(120).optional(), customerId: z.string().trim().max(120).optional(), customerName: z.string().trim().min(2).max(160), customerEmail: z.string().email().max(254).optional(), productType: z.enum(["launch", "business"]), planId: z.string().trim().max(120).optional(), niche: z.string().trim().max(100).optional(), style: z.enum(["modern", "bold", "premium"]).optional(), paymentStatus: z.enum(["pending", "paid", "failed", "refunded"]).default("pending"), externalId: z.string().trim().max(200).optional(),
 });
+const waasOnboardingSchema = z.object({ orderId: z.string().trim().min(1).max(120), business: z.record(z.string(), z.unknown()).default({}), branding: z.record(z.string(), z.unknown()).default({}), services: z.record(z.string(), z.unknown()).default({}), website: z.record(z.string(), z.unknown()).default({}), assets: z.array(z.object({ name: z.string().max(160), url: z.string().url().max(1000), type: z.string().max(80) })).max(50).default([]), completionPercentage: z.number().min(0).max(100).default(0) });
+const waasTicketSchema = z.object({ id: z.string().trim().max(120).optional(), orderId: z.string().trim().max(120).optional(), websiteId: z.string().trim().max(120).optional(), customerId: z.string().trim().max(120).optional(), subject: z.string().trim().min(2).max(200), description: z.string().trim().min(2).max(10000), category: z.enum(["content_update", "technical_issue", "website_down", "domain_dns", "form_lead", "email", "billing", "seo", "feature_request", "general"]).default("general"), priority: z.enum(["critical", "high", "normal", "request"]).default("normal") });
 
 async function upsertWaasRecord(workspaceId: string, collectionName: string, id: string, data: Record<string, unknown>) {
   const timestamp = new Date().toISOString();
@@ -355,6 +357,26 @@ app.post("/api/integrations/waas/orders", async (req, res) => {
     await upsertWaasRecord(supabaseWorkspaceId, "waas_activities", `order-created-${id}`, { actor: "storefront", action: "order_created", entityType: "waas_order", entityId: id, createdAt: now });
     return res.status(201).json({ success: true, id, order });
   } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid WAAS order", details: error.issues }); return res.status(503).json({ error: "WAAS order could not be recorded" }); }
+});
+
+function validWaasKey(req: express.Request) { const supplied = String(req.headers["x-waas-ingest-key"] || ""); return Boolean(process.env.WAAS_INGEST_API_KEY && supplied === process.env.WAAS_INGEST_API_KEY); }
+
+app.post("/api/integrations/waas/onboarding", async (req, res) => {
+  if (!validWaasKey(req)) return res.status(401).json({ error: "Unauthorized" });
+  try { const parsed = waasOnboardingSchema.parse(req.body); const id = `onboarding-${parsed.orderId}`; const now = new Date().toISOString(); await upsertWaasRecord(supabaseWorkspaceId, "waas_onboardings", id, { ...parsed, id, workspaceId: supabaseWorkspaceId, state: parsed.completionPercentage >= 100 ? "complete" : "in_progress", updatedAt: now }); await upsertWaasRecord(supabaseWorkspaceId, "waas_orders", parsed.orderId, { status: parsed.completionPercentage >= 100 ? "ready_for_deployment" : "onboarding_in_progress", onboardingId: id, updatedAt: now }); return res.json({ success: true, id, completionPercentage: parsed.completionPercentage }); } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid onboarding payload", details: error.issues }); return res.status(503).json({ error: "Onboarding could not be saved" }); }
+});
+
+app.get("/api/integrations/waas/orders/:id/status", async (req, res) => {
+  if (!validWaasKey(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { data: row, error } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: supabaseWorkspaceId, collection_name: "waas_orders", record_id: req.params.id, is_soft_deleted: false }).maybeSingle();
+  if (error) return res.status(503).json({ error: "Status unavailable" }); if (!row?.data) return res.status(404).json({ error: "Order not found" });
+  const order = row.data as any; const websiteRow = order.websiteId ? await supabaseServer.from("bos_records").select("data").match({ workspace_id: supabaseWorkspaceId, collection_name: "waas_websites", record_id: order.websiteId, is_soft_deleted: false }).maybeSingle() : { data: null } as any;
+  return res.json({ order, website: websiteRow.data?.data || null });
+});
+
+app.post("/api/integrations/waas/tickets", async (req, res) => {
+  if (!validWaasKey(req)) return res.status(401).json({ error: "Unauthorized" });
+  try { const parsed = waasTicketSchema.parse(req.body); const id = parsed.id || `portal-ticket-${crypto.randomUUID()}`; const now = new Date().toISOString(); const existing = await supabaseServer.from("bos_records").select("data").match({ workspace_id: supabaseWorkspaceId, collection_name: "waas_support_tickets", record_id: id, is_soft_deleted: false }).maybeSingle(); if (existing.data?.data) return res.json({ success: true, duplicate: true, ticket: existing.data.data }); const ticket = { ...parsed, id, workspaceId: supabaseWorkspaceId, ticketNumber: `WAAS-${Date.now().toString().slice(-6)}`, source: "customer_portal", status: "new", createdAt: now, updatedAt: now }; await upsertWaasRecord(supabaseWorkspaceId, "waas_support_tickets", id, ticket); return res.status(201).json({ success: true, ticket }); } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid support ticket", details: error.issues }); return res.status(503).json({ error: "Support ticket could not be created" }); }
 });
 
 app.post("/api/waas/orders/:id/deploy", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations"]), async (req: AuthenticatedRequest, res) => {

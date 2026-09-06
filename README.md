@@ -89,6 +89,11 @@ added as data rather than new page implementations. Deployment is intentionally
 review-gated: the mock adapter reaches `review_required`, never automatically
 publishes a customer site.
 
+The same server-to-server key protects `POST /api/integrations/waas/onboarding`,
+`GET /api/integrations/waas/orders/:id/status`, and
+`POST /api/integrations/waas/tickets`. These are the intended storefront and
+customer-portal contracts for onboarding, status polling, and support.
+
 The initial WordPress connector contract lives in
 `wordpress-plugin/bennietay-managed-connector/`. Define
 `BENNIETAY_CONNECTOR_SECRET` in the WordPress installation and send an
