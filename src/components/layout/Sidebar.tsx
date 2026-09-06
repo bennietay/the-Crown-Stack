@@ -63,10 +63,14 @@ export function Sidebar({ onClose, className }: SidebarProps) {
   const { user, workspace, workspaceRoles } = useAuthStore();
   const { activeBusiness, setActiveBusiness } = useBusinessStore();
 
-  const navigationGroups = bennieNavigation;
+  // The portfolio workspace is intentionally summary-only. Business workspaces
+  // expose their own operating area above plus shared admin operations below.
   const visibleNavigationGroups = activeBusiness === "all"
-    ? navigationGroups
-    : navigationGroups.filter(group => ["Operations", "System"].includes(group.section));
+    ? bennieNavigation.filter(group => group.section === "Command Center").map(group => ({
+      ...group,
+      items: group.items.filter(item => item.href === "/"),
+    }))
+    : bennieNavigation.filter(group => ["Operations", "System"].includes(group.section));
 
   const activeRole = workspace ? workspaceRoles[workspace.id] || user?.role || "customer" : user?.role || "customer";
   const activeBusinessDefinition = businessContexts.find(context => context.id === activeBusiness) || businessContexts[0];
@@ -141,7 +145,7 @@ export function Sidebar({ onClose, className }: SidebarProps) {
               <option key={context.id} value={context.id}>{context.name}</option>
             ))}
           </select>
-          <p className="mt-1.5 px-2 text-[10px] leading-4 text-slate-400">Dashboard always combines every business.</p>
+          <p className="mt-1.5 px-2 text-[10px] leading-4 text-slate-400">{activeBusiness === "all" ? "Summary dashboard across every business." : "Only this workspace's records and actions are shown."}</p>
         </div>
 
         <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-2.5">

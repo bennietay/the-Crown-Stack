@@ -14,7 +14,7 @@ import {
 import { useAuthStore } from "@/src/store/authStore";
 import { useDataStore } from "@/src/store/dataStore";
 import { useSettingsStore } from "@/src/store/settingsStore";
-import { businessContexts, useBusinessStore } from "@/src/store/businessStore";
+import { businessContexts, businessOwnsRoute, useBusinessStore } from "@/src/store/businessStore";
 import { cn } from "@/src/lib/utils";
 
 export function AppLayout({ children }: { children: ReactNode }) {
@@ -27,7 +27,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
   const activeBusiness = useBusinessStore(state => state.activeBusiness);
-  const setActiveBusiness = useBusinessStore(state => state.setActiveBusiness);
   const businessContext = businessContexts.find(context => context.id === activeBusiness) || businessContexts[0];
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -56,13 +55,13 @@ export function AppLayout({ children }: { children: ReactNode }) {
     setMobileMenuOpen(false);
   }, [location.pathname]);
 
+  // Never leave a user on a route belonging to another workspace. This also
+  // protects direct URL entry after switching workspaces.
   useEffect(() => {
-    const routeContext = location.pathname === "/" ? "all"
-      : location.pathname === "/leads" ? "waas"
-      : location.pathname === "/diamond" ? "amway"
-      : null;
-    if (routeContext && routeContext !== activeBusiness) setActiveBusiness(routeContext);
-  }, [location.pathname, activeBusiness, setActiveBusiness]);
+    if (!businessOwnsRoute(activeBusiness, location.pathname)) {
+      navigate(businessContexts.find(context => context.id === activeBusiness)?.href || "/");
+    }
+  }, [activeBusiness, location.pathname, navigate]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 font-sans text-slate-900">
