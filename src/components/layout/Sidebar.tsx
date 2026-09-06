@@ -13,9 +13,7 @@ import {
   LifeBuoy,
   Settings,
   LogOut,
-  Gem,
   Coins,
-  BriefcaseBusiness,
   Target,
   Bell,
   Bot,
@@ -43,10 +41,6 @@ const bennieNavigation = [
     { name: "Customers", href: "/customers", icon: Users2 },
     { name: "Support Tickets", href: "/tickets", icon: LifeBuoy },
   ]},
-  { section: "Businesses", items: [
-    { name: "WAAS", href: "/waas", icon: BriefcaseBusiness },
-    { name: "Amway", href: "/diamond", icon: Gem },
-  ]},
   { section: "Operations", items: [
     { name: "Work Queue", href: "/queue", icon: CheckSquare },
     { name: "Automations", href: "/automations", icon: Bot },
@@ -72,7 +66,7 @@ export function Sidebar({ onClose, className }: SidebarProps) {
   const navigationGroups = bennieNavigation;
   const visibleNavigationGroups = activeBusiness === "all"
     ? navigationGroups
-    : navigationGroups.filter(group => ["Operations", "System", activeBusiness === "waas" ? "Businesses" : "Businesses"].includes(group.section));
+    : navigationGroups.filter(group => ["Operations", "System"].includes(group.section));
 
   const activeRole = workspace ? workspaceRoles[workspace.id] || user?.role || "customer" : user?.role || "customer";
   const activeBusinessDefinition = businessContexts.find(context => context.id === activeBusiness) || businessContexts[0];
@@ -172,7 +166,7 @@ export function Sidebar({ onClose, className }: SidebarProps) {
                       <Link
                         key={item.name}
                         to={item.href}
-                        onClick={() => { if (group.section === "Businesses") { const context = businessContexts.find(candidate => candidate.name.toLowerCase().includes(item.name.toLowerCase())); if (context) setActiveBusiness(context.id); } onClose?.(); }}
+                        onClick={onClose}
                         className={cn(
                           "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs font-semibold transition-all active:scale-[0.98]",
                           isActive
