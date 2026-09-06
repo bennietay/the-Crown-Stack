@@ -11,7 +11,11 @@ export function WaasSales() {
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); setState("saving");
     try {
-      const response = await fetch("/api/capture", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: form.name, email: form.email, phone: form.phone, company: form.company, service: form.product === "launch" ? "Launch Website" : "Business Website", message: form.message, budget: "WAAS enquiry", timing: "ASAP", consent: true, country: "", website: "", source: "waas-sales" }) });
+      // Reuse the existing lead-capture contract so public WAAS enquiries are
+      // durable and immediately enter the same scoring/outreach workflow as
+      // internal submissions. The configured service/budget labels are used
+      // intentionally because the API validates them against workspace settings.
+      const response = await fetch("/api/capture", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: form.name, email: form.email, phone: form.phone, company: form.company, service: form.product === "launch" ? "Launch Website" : "Growth Website + SEO", message: `[WAAS ${form.product === "launch" ? "Launch" : "Business"} Website] ${form.message}`, budget: "RM3,000 - RM6,000", timing: "ASAP", consent: true, country: "", website: "", source: "waas-sales" }) });
       if (!response.ok) throw new Error();
       setState("done");
     } catch { setState("error"); }
