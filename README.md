@@ -88,3 +88,10 @@ S03, A01, T02, F01, C03, CT01), so new styles, niches and versions can be
 added as data rather than new page implementations. Deployment is intentionally
 review-gated: the mock adapter reaches `review_required`, never automatically
 publishes a customer site.
+
+The initial WordPress connector contract lives in
+`wordpress-plugin/bennietay-managed-connector/`. Define
+`BENNIETAY_CONNECTOR_SECRET` in the WordPress installation and send an
+`X-BennieTay-Signature` HMAC-SHA256 header for protected `/config` and `/lead`
+requests. The public `/health` endpoint exposes only non-sensitive version and
+site information.
