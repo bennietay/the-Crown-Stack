@@ -551,7 +551,10 @@ app.get("/api/integrations/waas/catalog", async (_req, res) => {
     const { data, error } = await supabaseServer.from("bos_records").select("collection_name,record_id,data").eq("workspace_id", supabaseWorkspaceId).in("collection_name", ["waas_plans", "waas_templates"]).eq("is_soft_deleted", false).limit(200);
     if (error) throw error;
     const rows = (data || []).map(row => ({ id: row.record_id, collection: row.collection_name, ...(row.data || {}) })).filter(row => row.active !== false && row.status !== "inactive");
-    return res.json({ plans: rows.filter(row => row.collection === "waas_plans"), templates: rows.filter(row => row.collection === "waas_templates").map(({ configuration: _configuration, ...template }) => template) });
+    const latest = <T extends Record<string, any>>(items: T[], key: (item: T) => string) => Array.from(items.reduce((map, item) => { const current = map.get(key(item)); if (!current || new Date(String(item.updatedAt || item.createdAt || 0)).getTime() >= new Date(String(current.updatedAt || current.createdAt || 0)).getTime()) map.set(key(item), item); return map; }, new Map<string, T>()).values());
+    const plans = latest(rows.filter(row => row.collection === "waas_plans" && (Number(row.setupFee || 0) > 0 || Number(row.recurringFee || 0) > 0)), row => String(row.productType || row.id));
+    const templates = latest(rows.filter(row => row.collection === "waas_templates"), row => `${row.productType || ""}:${row.niche || ""}:${row.style || ""}`).map(({ configuration: _configuration, ...template }) => template);
+    return res.json({ plans, templates });
   } catch (error) { console.error("WAAS catalogue lookup failed", error); return res.status(503).json({ error: "Catalogue is temporarily unavailable" }); }
 });
 
