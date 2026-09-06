@@ -26,6 +26,7 @@ const publicProposalFunctionUrl = `${supabaseServerUrl}/functions/v1/public-prop
 const integrationStatus = () => ({
   supabaseConfigured: supabaseReady,
   hostingerConfigured: Boolean(process.env.HOSTINGER_API_TOKEN && process.env.HOSTINGER_ORDER_ID && process.env.HOSTINGER_USERNAME),
+  waasIngestConfigured: Boolean(process.env.WAAS_INGEST_API_KEY && process.env.WAAS_CONNECTOR_INGEST_SECRET),
   waasDeploymentConfigured: Boolean(process.env.HOSTINGER_API_TOKEN && process.env.HOSTINGER_ORDER_ID && process.env.HOSTINGER_USERNAME && (process.env.HOSTINGER_WP_ADMIN_EMAIL || process.env.EMAIL_FROM) && process.env.CREDENTIAL_ENCRYPTION_KEY && process.env.WAAS_CONNECTOR_INGEST_SECRET),
   whatsappConfigured: Boolean(process.env.PUBLIC_WHATSAPP_URL || (process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID)),
   whatsappApiConfigured: Boolean(process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID),
@@ -505,6 +506,15 @@ app.post("/api/integrations/waas/assets/:assetId/complete", async (req, res) => 
     const actualSha256 = crypto.createHash("sha256").update(bytes).digest("hex");
     const expectedSha256 = String(parsed.sha256 || assetRow.data.sha256).toLowerCase();
     if (actualSha256 !== expectedSha256) return res.status(422).json({ error: "Uploaded asset checksum does not match declared metadata" });
+    const contentType = String(assetRow.data.content_type);
+    const header = bytes.subarray(0, 16);
+    const validSignature = contentType === "image/jpeg" ? header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff
+      : contentType === "image/png" ? header.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+        : contentType === "image/webp" ? header.subarray(0, 4).toString("ascii") === "RIFF" && header.subarray(8, 12).toString("ascii") === "WEBP"
+          : contentType === "application/pdf" ? header.subarray(0, 5).toString("ascii") === "%PDF-"
+            : contentType === "image/svg+xml" ? !/<\\s*(script|iframe|object|embed)\\b|\\bon[a-z]+\\s*=|<!ENTITY|javascript:/i.test(bytes.subarray(0, 1024 * 1024).toString("utf8"))
+              : false;
+    if (!validSignature) return res.status(422).json({ error: "Uploaded asset content does not match its declared type" });
     const updates: Record<string, unknown> = { status: "ready", sha256: actualSha256, updated_at: new Date().toISOString() };
     const { data, error } = await supabaseServer.from("waas_assets").update(updates).eq("id", req.params.assetId).eq("workspace_id", supabaseWorkspaceId).select("*").maybeSingle();
     if (error) throw error;
@@ -961,7 +971,7 @@ app.post("/api/webhooks/stripe", express.raw({ type: "application/json", limit: 
 
 app.get("/healthz", (_req, res) => res.status(200).json({ status: "alive", timestamp: new Date().toISOString() }));
 app.get("/readyz", (_req, res) => {
-  const ready = supabaseReady && (!isProduction || appMode === "live");
+  const ready = supabaseReady && (!isProduction || appMode === "live") && (!isProduction || Boolean(process.env.WAAS_INGEST_API_KEY && process.env.WAAS_CONNECTOR_INGEST_SECRET));
   res.status(ready ? 200 : 503).json({ status: ready ? "ready" : "not_ready" });
 });
 
@@ -1135,7 +1145,7 @@ app.all("/api/cron/waas-deployments", async (req, res) => {
   if (!expected || supplied !== expected) return res.status(401).json({ error: "Unauthorized" });
   try {
     const now = new Date().toISOString();
-    const { data: rows, error } = await supabaseServer.from("waas_deployment_jobs").select("deployment_id,status,lease_expires_at").eq("workspace_id", supabaseWorkspaceId).or(`status.eq.queued,lease_expires_at.lt.${now}`).order("created_at", { ascending: true }).limit(1);
+    const { data: rows, error } = await supabaseServer.from("waas_deployment_jobs").select("deployment_id,status,lease_expires_at").eq("workspace_id", supabaseWorkspaceId).or(`status.eq.queued,lease_expires_at.lt.${now}`).order("created_at", { ascending: true }).limit(5);
     if (error) throw error;
     const baseUrl = process.env.PUBLIC_APP_URL || "https://admin.bennietay.com";
     const results = [];

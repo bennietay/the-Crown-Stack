@@ -80,6 +80,19 @@ test("WAAS P0 boundaries are fail-closed", () => {
   assert.match(server, /Website is not ready for review/);
 });
 
+test("WAAS P1 operational guardrails are wired", () => {
+  const server = read("server.ts");
+  const store = read("src/store/dataStore.ts");
+  const page = read("src/pages/WaasOperations.tsx");
+  assert.match(server, /limit\(5\)/);
+  assert.match(server, /Uploaded asset content does not match its declared type/);
+  assert.match(server, /WAAS_INGEST_API_KEY && process\.env\.WAAS_CONNECTOR_INGEST_SECRET/);
+  assert.match(store, /waas_ticket_sla/);
+  assert.match(page, /mapsUrl/);
+  assert.match(page, /assetUrls/);
+  assert.match(page, /customerId/);
+});
+
 test("expanded production API remains fail-closed", () => {
   const server = read("server.ts");
   assert.match(server, /\/api\/ai\/daily-brief/);

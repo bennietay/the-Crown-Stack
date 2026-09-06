@@ -454,6 +454,7 @@ export interface Customer {
   id: string;
   workspaceId: string;
   name: string;
+  company?: string;
   email: string;
   phone?: string;
   country?: string;
