@@ -391,6 +391,35 @@ app.post("/api/waas/orders/:id/deploy", authenticateUser, requireWorkspace(), re
   } catch (error) { console.error("WAAS deployment failed", error); return res.status(503).json({ error: "WAAS deployment could not be started" }); }
 });
 
+app.post("/api/waas/deployments/:id/run", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations"]), async (req: AuthenticatedRequest, res) => {
+  try {
+    const workspaceId = req.workspaceId!; const deploymentId = req.params.id;
+    const { data: deploymentRow, error: deploymentError } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "waas_deployments", record_id: deploymentId, is_soft_deleted: false }).maybeSingle(); if (deploymentError) throw deploymentError; if (!deploymentRow?.data) return res.status(404).json({ error: "Deployment not found" });
+    const deployment = deploymentRow.data as any; if (["complete", "cancelled"].includes(deployment.status)) return res.status(409).json({ error: "Deployment is not runnable in its current state" });
+    const { data: orderRow } = deployment.orderId ? await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "waas_orders", record_id: deployment.orderId, is_soft_deleted: false }).maybeSingle() : { data: null } as any; const order = orderRow?.data as any;
+    if (!order) return res.status(409).json({ error: "Deployment order is missing" });
+    const { data: onboardingRow } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "waas_onboardings", is_soft_deleted: false }).eq("data->>orderId", deployment.orderId).maybeSingle();
+    if (!onboardingRow?.data || (onboardingRow.data as any).state !== "complete") {
+      await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, status: "waiting", currentStep: "validate_onboarding", errorMessage: "Completed onboarding is required before deployment", updatedAt: new Date().toISOString() });
+      await upsertWaasRecord(workspaceId, "waas_orders", deployment.orderId, { ...order, status: "awaiting_onboarding", updatedAt: new Date().toISOString() });
+      return res.status(409).json({ error: "Completed onboarding is required before deployment" });
+    }
+    const names = ["validate_order", "validate_onboarding", "provision_site", "install_wordpress", "apply_template", "run_qa", "review_gate"]; const now = new Date().toISOString(); await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, status: "running", provider: "mock", startedAt: deployment.startedAt || now, currentStep: names[0], updatedAt: now });
+    const provider = getHostingProvider(); let hosting: { installationId: string; temporaryUrl: string } | null = null;
+    for (const [index, name] of names.entries()) {
+      const stepId = `${deploymentId}-${name}`; const step = { id: stepId, workspaceId, deploymentId, name, status: "running", startedAt: new Date().toISOString(), retryCount: 0, logs: [`Started ${name}`] };
+      await upsertWaasRecord(workspaceId, "waas_deployment_steps", stepId, step);
+      if (name === "provision_site") hosting = await provider.createWebsite({ customerName: order.customerName });
+      const completed = { ...step, status: "complete", completedAt: new Date().toISOString(), logs: [...step.logs, `Completed ${name}`] };
+      await upsertWaasRecord(workspaceId, "waas_deployment_steps", stepId, completed);
+      if (index < names.length - 1) await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, status: "running", provider: "mock", currentStep: names[index + 1], startedAt: deployment.startedAt || now, updatedAt: new Date().toISOString() });
+    }
+    const websiteId = deployment.websiteId || `waas-site-${crypto.randomUUID()}`; const website = { id: websiteId, workspaceId, orderId: deployment.orderId, customerId: order.customerId, productType: order.productType, niche: order.niche, style: order.style, templateId: order.templateId, status: "review_required", deploymentStatus: "review_required", wordpressInstallationId: hosting?.installationId, temporaryUrl: hosting?.temporaryUrl, lastHealthCheck: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; await upsertWaasRecord(workspaceId, "waas_websites", websiteId, website);
+    await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, status: "review_required", currentStep: "review_gate", websiteId, completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); await upsertWaasRecord(workspaceId, "waas_orders", deployment.orderId, { ...order, websiteId, deploymentId, status: "review_required", updatedAt: new Date().toISOString() });
+    return res.json({ success: true, deploymentId, websiteId, status: "review_required", previewUrl: hosting?.temporaryUrl, requiresApproval: true });
+  } catch (error) { console.error("WAAS deployment run failed", error); return res.status(503).json({ error: "WAAS deployment job failed" }); }
+});
+
 app.post("/api/webhooks/stripe", express.raw({ type: "application/json", limit: "1mb" }), async (req, res) => {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || process.env.stripe_webhook_secret;
   const signature = req.headers["stripe-signature"];
