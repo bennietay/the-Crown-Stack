@@ -24,7 +24,11 @@ export function RouterProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (destination === window.location.pathname) return;
-      window.history.pushState({}, "", destination);
+      const publicDestination = destination === "/sales" || destination === "/capture" || destination === "/portal" || destination.startsWith("/p/");
+      const target = window.location.pathname.startsWith("/admin") && typeof destination === "string" && destination.startsWith("/") && !publicDestination
+        ? `/admin${destination === "/" ? "" : destination}`
+        : destination;
+      window.history.pushState({}, "", target);
       setPathname(window.location.pathname);
       window.scrollTo({ top: 0 });
     },

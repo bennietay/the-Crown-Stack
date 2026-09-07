@@ -68,6 +68,14 @@ describe("WAAS architecture", () => {
     assert.match(server, /Return JSON only/);
   });
 
+  it("canonical storefront and admin path are separated", () => {
+    const app = fs.readFileSync(path.join(process.cwd(), "src/App.tsx"), "utf8");
+    const router = fs.readFileSync(path.join(process.cwd(), "src/lib/router.tsx"), "utf8");
+    assert.match(app, /rawPathname === "\/admin"/);
+    assert.match(app, /pathname === "\/" \|\| pathname === "\/sales"/);
+    assert.match(router, /`\/admin\$\{destination/);
+  });
+
   it("P2 asset verification and SLA visibility remain wired into the server", () => {
     const server = fs.readFileSync(path.join(process.cwd(), "server.ts"), "utf8");
     assert.match(server, /storage\.from\(waasAssetBucket\(\)\)\.download/);

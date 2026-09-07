@@ -74,8 +74,10 @@ Set `BOOTSTRAP_ADMIN_EMAIL` to the exact email address of the first administrato
 
 ## WAAS managed WordPress operations
 
-The `/waas` admin route is the internal operating system for the standalone
-Managed WordPress storefront. It uses the existing workspace-scoped
+The `/admin/waas` admin route is the internal operating system for the standalone
+Managed WordPress storefront. The public storefront is served at `/` on
+`website.bennietay.com`; authenticated operations are served under
+`website.bennietay.com/admin`. It uses the existing workspace-scoped
 `bos_records` document store and adds these collections: `waas_plans`,
 `waas_templates`, `waas_orders`, `waas_onboardings`, `waas_websites`,
 `waas_deployments`, `waas_deployment_steps`, `waas_support_tickets`, and

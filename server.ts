@@ -23,6 +23,8 @@ if (isProduction && appMode !== "live") throw new Error("Production startup refu
 const supabaseReady = hasSupabaseServiceRole;
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 const publicProposalFunctionUrl = `${supabaseServerUrl}/functions/v1/public-proposal`;
+const publicWebsiteUrl = process.env.PUBLIC_APP_URL || "https://website.bennietay.com";
+const adminPortalUrl = process.env.ADMIN_APP_URL || "https://website.bennietay.com/admin";
 
 const integrationStatus = () => ({
   supabaseConfigured: supabaseReady,
@@ -46,7 +48,7 @@ const integrationEncryptionSecret = () => process.env.CREDENTIAL_ENCRYPTION_KEY 
 const waasAssetBucket = () => process.env.WAAS_ASSET_BUCKET || "waas-assets";
 const etsyApiHeader = () => `${process.env.ETSY_API_KEY || ""}:${process.env.ETSY_SHARED_SECRET || ""}`;
 const etsyScopes = ["listings_r", "listings_w", "shops_r", "transactions_r"];
-const safeAppRedirect = (query: string) => `${process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"}/businesses?${query}`;
+const safeAppRedirect = (query: string) => `${adminPortalUrl}/businesses?${query}`;
 
 async function readEncryptedIntegration<T>(workspaceId: string, recordId: string): Promise<T | null> {
   const { data, error } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: "integration_secrets", record_id: recordId, is_soft_deleted: false }).maybeSingle();
@@ -624,7 +626,7 @@ app.post("/api/integrations/waas/orders/:id/portal-token", (req, res) => {
     if (!secret) return res.status(503).json({ error: "Customer portal is not configured" });
     const token = crypto.createHmac("sha256", secret).update(`order:${orderId}`).digest("hex");
     res.setHeader("Cache-Control", "no-store");
-    return res.json({ orderId, token, portalUrl: `${process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"}/portal?order=${encodeURIComponent(orderId)}&token=${encodeURIComponent(token)}` });
+    return res.json({ orderId, token, portalUrl: `${publicWebsiteUrl}/portal?order=${encodeURIComponent(orderId)}&token=${encodeURIComponent(token)}` });
   })().catch(error => { console.error("Portal token issuance failed", error); if (!res.headersSent) res.status(503).json({ error: "Portal token could not be issued" }); });
 });
 
@@ -718,7 +720,7 @@ app.post("/api/waas/orders/:id/checkout", authenticateUser, requireWorkspace(), 
       const existingSession = await stripe.checkout.sessions.retrieve(String(order.checkoutSessionId));
       if (existingSession.status === "open" && existingSession.url) return res.json({ checkoutUrl: existingSession.url, sessionId: existingSession.id, reused: true });
     }
-    const session = await stripe.checkout.sessions.create({ mode: Number(plan.recurringFee) > 0 ? "subscription" : "payment", line_items: lineItems, customer_email: order.customerEmail || undefined, metadata, subscription_data: Number(plan.recurringFee) > 0 ? { metadata } : undefined, success_url: `${process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"}/waas?payment=success&order=${encodeURIComponent(order.id)}`, cancel_url: `${process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"}/waas?payment=cancelled&order=${encodeURIComponent(order.id)}` }, { idempotencyKey: `waas-checkout-${req.workspaceId}-${order.id}` });
+    const session = await stripe.checkout.sessions.create({ mode: Number(plan.recurringFee) > 0 ? "subscription" : "payment", line_items: lineItems, customer_email: order.customerEmail || undefined, metadata, subscription_data: Number(plan.recurringFee) > 0 ? { metadata } : undefined, success_url: `${adminPortalUrl}/waas?payment=success&order=${encodeURIComponent(order.id)}`, cancel_url: `${adminPortalUrl}/waas?payment=cancelled&order=${encodeURIComponent(order.id)}` }, { idempotencyKey: `waas-checkout-${req.workspaceId}-${order.id}` });
     await upsertWaasRecord(req.workspaceId!, "waas_orders", order.id, { ...order, paymentStatus: "pending", checkoutSessionId: session.id, updatedAt: new Date().toISOString() });
     return res.json({ checkoutUrl: session.url, sessionId: session.id });
   } catch (error) { console.error("WAAS checkout creation failed", error); return res.status(503).json({ error: "WAAS checkout could not be created" }); }
@@ -960,7 +962,7 @@ app.post("/api/waas/deployments/:id/run", deploymentWorkerAuth, requireWorkspace
         const masterSecret = String(process.env.WAAS_CONNECTOR_INGEST_SECRET || "");
         if (!masterSecret) throw new Error("WAAS_CONNECTOR_INGEST_SECRET is required to configure lead capture");
         const connectorSecret = crypto.createHmac("sha256", masterSecret).update(`website:${websiteId}`).digest("hex");
-        await provider.configureManagedSite(hosting.installationId, { websiteId, adminApiUrl: String(process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"), connectorSecret, configuration: { ...template.configuration, business_name: onboarding.business?.name || order.customerName, hero: onboarding.business?.description || template.configuration?.hero, intro: onboarding.business?.description, phone: onboarding.business?.phone, email: onboarding.business?.email, service_areas: onboarding.business?.serviceAreas, services: onboarding.services?.mainServices, cta: onboarding.website?.preferredCta, primary_colour: normalizeHex(onboarding.branding?.primaryColour), secondary_colour: normalizeHex(onboarding.branding?.secondaryColour, "#f59e0b"), brand_tokens: deriveBrandTokens(onboarding.branding?.primaryColour, onboarding.branding?.secondaryColour), template_id: order.templateId, template_version: template.version, niche: order.niche, style: order.style, structured_content: onboarding.content || {} } });
+        await provider.configureManagedSite(hosting.installationId, { websiteId, adminApiUrl: String(publicWebsiteUrl), connectorSecret, configuration: { ...template.configuration, business_name: onboarding.business?.name || order.customerName, hero: onboarding.business?.description || template.configuration?.hero, intro: onboarding.business?.description, phone: onboarding.business?.phone, email: onboarding.business?.email, service_areas: onboarding.business?.serviceAreas, services: onboarding.services?.mainServices, cta: onboarding.website?.preferredCta, primary_colour: normalizeHex(onboarding.branding?.primaryColour), secondary_colour: normalizeHex(onboarding.branding?.secondaryColour, "#f59e0b"), brand_tokens: deriveBrandTokens(onboarding.branding?.primaryColour, onboarding.branding?.secondaryColour), template_id: order.templateId, template_version: template.version, niche: order.niche, style: order.style, structured_content: onboarding.content || {} } });
       }
       if (name === "configure_domain_ssl" && hosting && domain) await provider.configureDomain(hosting.installationId, domain);
       if (name === "run_qa") {
@@ -1341,7 +1343,7 @@ app.all("/api/cron/waas-deployments", async (req, res) => {
     const now = new Date().toISOString();
     const { data: rows, error } = await supabaseServer.from("waas_deployment_jobs").select("deployment_id,status,lease_expires_at").eq("workspace_id", supabaseWorkspaceId).or(`status.eq.queued,lease_expires_at.lt.${now}`).order("created_at", { ascending: true }).limit(5);
     if (error) throw error;
-    const baseUrl = process.env.PUBLIC_APP_URL || "https://admin.bennietay.com";
+    const baseUrl = publicWebsiteUrl;
     const results = [];
     for (const row of rows || []) {
       const controller = new AbortController();

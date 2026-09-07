@@ -36,6 +36,15 @@ export function WaasOperations() {
       setTicketSla(Object.fromEntries((result.sla || []).map((item: any) => [item.ticket_id, item])));
     })();
   }, [activeWorkspaceId, tab]);
+  useEffect(() => {
+    // The operations page keeps the existing compact forms, but the catalog
+    // must expose the complete style catalog even for templates created before
+    // the six-style system was introduced.
+    document.querySelectorAll<HTMLSelectElement>('select[name="style"], select[aria-label="Filter style"]').forEach(select => {
+      const existing = new Set(Array.from(select.options).map(option => option.value));
+      WAAS_STYLES.forEach(style => { if (!existing.has(style)) select.add(new Option(style.charAt(0).toUpperCase() + style.slice(1), style)); });
+    });
+  }, [tab, showTemplate, showOrder]);
   const metrics = useMemo(() => ({
     newOrders: waasOrders.filter(o => ["paid", "awaiting_onboarding"].includes(o.status)).length,
     onboarding: waasOrders.filter(o => ["awaiting_onboarding", "onboarding_in_progress"].includes(o.status)).length,

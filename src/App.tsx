@@ -98,7 +98,9 @@ function PrivatePage({ pathname, activeRole }: { pathname: string; activeRole: R
 }
 
 function ApplicationRoutes() {
-  const { pathname } = useLocation();
+  const { pathname: rawPathname } = useLocation();
+  const adminPath = rawPathname === "/admin" || rawPathname.startsWith("/admin/");
+  const pathname = adminPath ? (rawPathname.slice("/admin".length) || "/") : rawPathname;
   const user = useAuthStore(state => state.user);
   const workspace = useAuthStore(state => state.workspace);
   const workspaceRoles = useAuthStore(state => state.workspaceRoles);
@@ -106,8 +108,8 @@ function ApplicationRoutes() {
   const error = useAuthStore(state => state.error);
   const clearError = useAuthStore(state => state.clearError);
 
-  if (pathname === "/capture") return <LeadCapture />;
-  if (pathname === "/sales") return <WaasSales />;
+  if (!adminPath && (pathname === "/" || pathname === "/sales")) return <WaasSales />;
+  if (!adminPath && pathname === "/capture") return <LeadCapture />;
   if (pathname === "/portal") return <WaasPortal />;
   if (pathname.startsWith("/p/")) return <ProposalView />;
 
