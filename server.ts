@@ -345,6 +345,7 @@ const jsonBodyParser = express.json({ limit: "2mb", verify: (req, _res, buffer) 
 app.use((req, res, next) => req.path === "/api/webhooks/stripe" ? next() : jsonBodyParser(req, res, next));
 const captureLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 15, keyGenerator: rateKey, message: { error: "Too many enquiry attempts. Please try again later." } });
 const acceptanceLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, keyGenerator: rateKey, message: { error: "Too many acceptance attempts. Please try again later." } });
+const storefrontCheckoutLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, keyGenerator: rateKey, message: { error: "Too many checkout attempts. Please try again later." } });
 
 const waasOrderSchema = z.object({
   id: z.string().trim().max(120).optional(), customerId: z.string().trim().max(120).optional(), customerName: z.string().trim().min(2).max(160), customerEmail: z.string().email().max(254).optional(), productType: z.enum(["launch", "business"]), planId: z.string().trim().max(120).optional(), niche: z.string().trim().max(100).optional(), style: z.enum(WAAS_STYLES).optional(), paymentStatus: z.enum(["pending", "paid", "failed", "refunded"]).default("pending"), externalId: z.string().trim().max(200).optional(),
@@ -429,6 +430,44 @@ app.post("/api/integrations/waas/checkout", async (req, res) => {
 });
 
 function validWaasKey(req: express.Request) { const supplied = String(req.headers["x-waas-ingest-key"] || ""); return Boolean(process.env.WAAS_INGEST_API_KEY && supplied === process.env.WAAS_INGEST_API_KEY); }
+
+function validStorefrontOrigin(req: express.Request) {
+  const configured = process.env.PUBLIC_APP_URL || "https://website.bennietay.com";
+  const origin = String(req.headers.origin || "");
+  try { return !origin || new URL(origin).origin === new URL(configured).origin; } catch { return false; }
+}
+
+// Public storefront checkout. The browser never receives the ingest key or
+// Stripe secret; the origin check and rate limit protect this intentionally
+// public entry point, while the order/externalId pair makes retries idempotent.
+app.post("/api/waas/storefront/checkout", storefrontCheckoutLimiter, async (req, res) => {
+  if (!validStorefrontOrigin(req)) return res.status(403).json({ error: "Invalid storefront origin" });
+  if (!stripe) return res.status(503).json({ error: "Online payment is not configured" });
+  try {
+    const parsed = waasOrderSchema.extend({ planId: z.string().trim().min(1).max(120) }).parse(req.body);
+    const orderId = parsed.id || (parsed.externalId ? `external-${parsed.externalId}` : `waas-order-${crypto.randomUUID()}`);
+    const now = new Date().toISOString();
+    const existing = await readWaasRecord(supabaseWorkspaceId, "waas_orders", orderId);
+    const order = existing || { ...parsed, id: orderId, workspaceId: supabaseWorkspaceId, status: "pending_payment", createdAt: now, updatedAt: now };
+    if (!existing) await upsertWaasRecord(supabaseWorkspaceId, "waas_orders", orderId, order);
+    const plan = await readWaasRecord(supabaseWorkspaceId, "waas_plans", String(parsed.planId));
+    if (!plan || plan.active === false) return res.status(409).json({ error: "The selected WAAS plan is unavailable" });
+    if (order.checkoutSessionId) {
+      const previous = await stripe.checkout.sessions.retrieve(String(order.checkoutSessionId));
+      if (previous.status === "open" && previous.url) return res.json({ success: true, orderId, checkoutUrl: previous.url, sessionId: previous.id, reused: true });
+    }
+    const currency = String(plan.currency || "MYR").toLowerCase();
+    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [];
+    if (Number(plan.setupFee) > 0) lineItems.push({ price_data: { currency, product_data: { name: `${plan.name} setup` }, unit_amount: Math.round(Number(plan.setupFee) * 100) }, quantity: 1 });
+    if (Number(plan.recurringFee) > 0) lineItems.push({ price_data: { currency, product_data: { name: `${plan.name} care plan` }, unit_amount: Math.round(Number(plan.recurringFee) * 100), recurring: { interval: plan.billingInterval === "year" ? "year" : "month" } }, quantity: 1 });
+    if (!lineItems.length) return res.status(409).json({ error: "The selected plan has no billable amount" });
+    const metadata = { workspaceId: supabaseWorkspaceId, waasOrderId: orderId, planId: String(plan.id) };
+    const session = await stripe.checkout.sessions.create({ mode: Number(plan.recurringFee) > 0 ? "subscription" : "payment", line_items: lineItems, customer_email: order.customerEmail || undefined, metadata, subscription_data: Number(plan.recurringFee) > 0 ? { metadata } : undefined, success_url: `${process.env.PUBLIC_APP_URL || "https://website.bennietay.com"}/order/${encodeURIComponent(orderId)}?payment=success`, cancel_url: `${process.env.PUBLIC_APP_URL || "https://website.bennietay.com"}/order/${encodeURIComponent(orderId)}?payment=cancelled` }, { idempotencyKey: `waas-storefront-checkout-${supabaseWorkspaceId}-${orderId}` });
+    await upsertWaasRecord(supabaseWorkspaceId, "waas_orders", orderId, { ...order, planId: plan.id, checkoutSessionId: session.id, paymentStatus: "pending", updatedAt: now });
+    await recordWaasActivity(supabaseWorkspaceId, "checkout_created", "waas_order", orderId, { sessionId: session.id }, "storefront");
+    return res.status(201).json({ success: true, orderId, checkoutUrl: session.url, sessionId: session.id });
+  } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid checkout request", details: error.issues }); console.error("Public WAAS checkout failed", error); return res.status(503).json({ error: "Checkout could not be created" }); }
+});
 
 function validPortalToken(orderId: string, token: string) {
   const secret = String(process.env.WAAS_PORTAL_SECRET || "");
