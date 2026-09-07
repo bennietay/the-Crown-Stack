@@ -82,10 +82,17 @@ describe("WAAS architecture", () => {
     assert.match(app, /pathname === "\/sales"/);
     assert.match(app, /pathname === "\/portal"/);
     assert.match(server, /\/api\/integrations\/waas\/catalog/);
+    assert.match(server, /\/api\/integrations\/waas\/orders\/:id\/portal-token/);
     assert.match(server, /\/api\/portal\/orders\/:id/);
     assert.match(server, /WAAS_PORTAL_SECRET/);
     assert.match(server, /timingSafeEqual/);
     assert.match(server, /\/api\/ops\/monitoring/);
+  });
+
+  it("deployment start is idempotent for repeated clicks", () => {
+    const server = fs.readFileSync(path.join(process.cwd(), "server.ts"), "utf8");
+    assert.match(server, /A repeated click must be idempotent/);
+    assert.match(server, /duplicate: true, deploymentId/);
   });
 
   it("queued deployments have a protected cron runner", () => {

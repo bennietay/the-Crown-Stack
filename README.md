@@ -103,6 +103,12 @@ The same server-to-server key protects `POST /api/integrations/waas/onboarding`,
 `POST /api/integrations/waas/tickets`. These are the intended storefront and
 customer-portal contracts for onboarding, status polling, and support.
 
+The storefront can mint an order-scoped customer portal link with
+`POST /api/integrations/waas/orders/:id/portal-token` using the server-only
+`X-WAAS-Ingest-Key`. The portal secret is never exposed to the storefront
+browser. The endpoint is idempotent and returns a deterministic HMAC token for
+the requested order.
+
 Hostinger provisioning is implemented behind `src/server/hostingerProvider.ts`.
 Set `HOSTINGER_API_TOKEN`, `HOSTINGER_USERNAME`, `HOSTINGER_ORDER_ID`, and
 `HOSTINGER_WP_ADMIN_EMAIL` to enable the real provider. A unique random login

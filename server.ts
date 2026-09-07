@@ -558,6 +558,25 @@ app.get("/api/integrations/waas/catalog", async (_req, res) => {
   } catch (error) { console.error("WAAS catalogue lookup failed", error); return res.status(503).json({ error: "Catalogue is temporarily unavailable" }); }
 });
 
+// Server-to-server storefront contract for customer portal links. The
+// storefront never needs the portal secret: it authenticates with the scoped
+// ingest key and receives an order-bound token that is safe to place in the
+// customer's portal URL. No customer or payment data is returned here.
+app.post("/api/integrations/waas/orders/:id/portal-token", (req, res) => {
+  if (!validWaasKey(req)) return res.status(401).json({ error: "Unauthorized" });
+  const orderId = String(req.params.id || "").trim();
+  if (!orderId || orderId.length > 120) return res.status(400).json({ error: "Invalid order id" });
+  void (async () => {
+    const order = await readWaasRecord(supabaseWorkspaceId, "waas_orders", orderId);
+    if (!order) return res.status(404).json({ error: "Order not found" });
+    const secret = String(process.env.WAAS_PORTAL_SECRET || "");
+    if (!secret) return res.status(503).json({ error: "Customer portal is not configured" });
+    const token = crypto.createHmac("sha256", secret).update(`order:${orderId}`).digest("hex");
+    res.setHeader("Cache-Control", "no-store");
+    return res.json({ orderId, token, portalUrl: `${process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"}/portal?order=${encodeURIComponent(orderId)}&token=${encodeURIComponent(token)}` });
+  })().catch(error => { console.error("Portal token issuance failed", error); if (!res.headersSent) res.status(503).json({ error: "Portal token could not be issued" }); });
+});
+
 // Customer portal contract. The standalone storefront should mint a portal
 // token server-side using WAAS_PORTAL_SECRET; the secret is never sent to the
 // browser. Tokens are order-scoped and only return customer-safe fields.
@@ -755,6 +774,13 @@ app.post("/api/waas/orders/:id/deploy", authenticateUser, requireWorkspace(), re
     const deploymentId = String(durableJob.deployment_id);
     const existing = await supabaseServer.from("bos_records").select("data").match({ workspace_id: req.workspaceId, collection_name: "waas_deployments", record_id: deploymentId, is_soft_deleted: false }).maybeSingle();
     const now = new Date().toISOString();
+    // A repeated click must be idempotent. Once a deployment is queued,
+    // running, complete, or waiting for review, return its current state
+    // without moving the order backwards or creating a second run.
+    if (existing.data?.data && !["failed", "waiting"].includes(String((existing.data.data as any).status))) {
+      const current = existing.data.data as any;
+      return res.status(200).json({ success: true, duplicate: true, deploymentId, status: current.status, next: `/api/waas/deployments/${encodeURIComponent(deploymentId)}/run` });
+    }
     if (!existing.data?.data) {
       await upsertWaasRecord(req.workspaceId!, "waas_deployments", deploymentId, { id: deploymentId, workspaceId: req.workspaceId, orderId, status: "queued", provider: getHostingProviderKind(), currentStep: WAAS_DEPLOYMENT_STEPS[0], createdAt: now, updatedAt: now });
     } else if (["waiting", "failed"].includes(String((existing.data.data as any).status))) {

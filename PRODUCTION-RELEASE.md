@@ -3,7 +3,7 @@
 ## Verified locally
 
 - `npm run lint` passes.
-- `npm test` passes (46 tests).
+- `npm test` passes (67 tests).
 - `npm run build` completes successfully.
 - `npm audit --omit=dev` reports zero known vulnerabilities.
 - Public lead capture renders immediately with a branded fallback while tenant settings load.
