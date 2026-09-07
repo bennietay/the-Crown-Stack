@@ -25,7 +25,7 @@ export const leadCaptureSchema = z.object({
   timing: z.string().trim().min(1).max(50),
   message: z.string().max(1000).optional(),
   consent: z.boolean().refine(val => val === true, "Consent required"),
-  _honey: z.string().max(0, "Invalid submission"),
+  _honey: z.string().max(0, "Invalid submission").optional().default(""),
   source: z.string().max(200).optional(),
   utm_source: z.string().max(200).optional(),
   utm_medium: z.string().max(200).optional(),

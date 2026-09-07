@@ -12,6 +12,7 @@ import { decryptCredential, encryptCredential, EncryptedPayload } from "./src/se
 import { revenueByBusiness, summarizeRevenue } from "./src/lib/revenue";
 import { getHostingProvider, getHostingProviderKind } from "./src/server/hostingerProvider";
 import { WAAS_DEPLOYMENT_STEPS } from "./src/server/waasDeploymentEngine";
+import { deriveBrandTokens, normalizeHex, WAAS_STYLES } from "./src/lib/waasDesign";
 
 const isProduction = process.env.NODE_ENV === "production";
 const appMode = process.env.APP_MODE || (isProduction ? "" : "demo");
@@ -344,9 +345,9 @@ const captureLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 15, keyGenerat
 const acceptanceLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, keyGenerator: rateKey, message: { error: "Too many acceptance attempts. Please try again later." } });
 
 const waasOrderSchema = z.object({
-  id: z.string().trim().max(120).optional(), customerId: z.string().trim().max(120).optional(), customerName: z.string().trim().min(2).max(160), customerEmail: z.string().email().max(254).optional(), productType: z.enum(["launch", "business"]), planId: z.string().trim().max(120).optional(), niche: z.string().trim().max(100).optional(), style: z.enum(["modern", "bold", "premium"]).optional(), paymentStatus: z.enum(["pending", "paid", "failed", "refunded"]).default("pending"), externalId: z.string().trim().max(200).optional(),
+  id: z.string().trim().max(120).optional(), customerId: z.string().trim().max(120).optional(), customerName: z.string().trim().min(2).max(160), customerEmail: z.string().email().max(254).optional(), productType: z.enum(["launch", "business"]), planId: z.string().trim().max(120).optional(), niche: z.string().trim().max(100).optional(), style: z.enum(WAAS_STYLES).optional(), paymentStatus: z.enum(["pending", "paid", "failed", "refunded"]).default("pending"), externalId: z.string().trim().max(200).optional(),
 });
-const waasOnboardingSchema = z.object({ orderId: z.string().trim().min(1).max(120), business: z.record(z.string(), z.unknown()).default({}), branding: z.record(z.string(), z.unknown()).default({}), services: z.record(z.string(), z.unknown()).default({}), website: z.record(z.string(), z.unknown()).default({}), assets: z.array(z.object({ name: z.string().max(160), url: z.string().url().max(1000), type: z.string().max(80) })).max(50).default([]), completionPercentage: z.number().min(0).max(100).default(0) });
+const waasOnboardingSchema = z.object({ orderId: z.string().trim().min(1).max(120), business: z.record(z.string(), z.unknown()).default({}), branding: z.record(z.string(), z.unknown()).default({}), services: z.record(z.string(), z.unknown()).default({}), website: z.record(z.string(), z.unknown()).default({}), assets: z.array(z.object({ name: z.string().max(160), url: z.string().url().max(1000), type: z.string().max(80) })).max(50).default([]), completionPercentage: z.number().min(0).max(100).default(0) }).superRefine((value, ctx) => { for (const field of ["primaryColour", "secondaryColour"] as const) { const colour = value.branding[field]; if (colour !== undefined && colour !== "" && !/^#[0-9a-f]{6}$/i.test(String(colour))) ctx.addIssue({ code: "custom", path: ["branding", field], message: `${field} must be a six-digit HEX colour` }); } });
 const waasTicketSchema = z.object({ id: z.string().trim().max(120).optional(), orderId: z.string().trim().max(120).optional(), websiteId: z.string().trim().max(120).optional(), customerId: z.string().trim().max(120).optional(), subject: z.string().trim().min(2).max(200), description: z.string().trim().min(2).max(10000), category: z.enum(["content_update", "technical_issue", "website_down", "domain_dns", "form_lead", "email", "billing", "seo", "feature_request", "general"]).default("general"), priority: z.enum(["critical", "high", "normal", "request"]).default("normal") });
 const waasTicketMessageSchema = z.object({ ticketId: z.string().trim().min(1).max(120), body: z.string().trim().min(1).max(20000), authorType: z.enum(["customer", "admin", "connector"]).default("customer"), authorId: z.string().trim().max(120).optional(), internal: z.boolean().default(false) });
 const waasAssetSchema = z.object({ orderId: z.string().trim().max(120).optional(), websiteId: z.string().trim().max(120).optional(), ticketId: z.string().trim().max(120).optional(), originalName: z.string().trim().min(1).max(160), contentType: z.enum(["image/jpeg", "image/png", "image/webp", "image/svg+xml", "application/pdf"]), byteSize: z.number().int().positive().max(10 * 1024 * 1024), sha256: z.string().regex(/^[0-9a-f]{64}$/i) });
@@ -397,6 +398,32 @@ app.post("/api/integrations/waas/orders", async (req, res) => {
     await upsertWaasRecord(supabaseWorkspaceId, "waas_activities", `order-created-${id}`, { actor: "storefront", action: "order_created", entityType: "waas_order", entityId: id, createdAt: now });
     return res.status(201).json({ success: true, id, order });
   } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid WAAS order", details: error.issues }); return res.status(503).json({ error: "WAAS order could not be recorded" }); }
+});
+
+// Storefront server contract: create (or reuse) an order and a real Stripe
+// Checkout URL without exposing the ingest key or Stripe secret to a browser.
+app.post("/api/integrations/waas/checkout", async (req, res) => {
+  if (!validWaasKey(req)) return res.status(401).json({ error: "Unauthorized" });
+  if (!stripe) return res.status(503).json({ error: "Online payment is not configured" });
+  try {
+    const parsed = waasOrderSchema.parse(req.body); if (!parsed.planId) return res.status(400).json({ error: "planId is required" });
+    const orderId = parsed.id || (parsed.externalId ? `external-${parsed.externalId}` : `waas-order-${crypto.randomUUID()}`); const now = new Date().toISOString();
+    const existing = await readWaasRecord(supabaseWorkspaceId, "waas_orders", orderId);
+    const order = existing || { ...parsed, id: orderId, workspaceId: supabaseWorkspaceId, status: "pending_payment", createdAt: now, updatedAt: now };
+    if (!existing) await upsertWaasRecord(supabaseWorkspaceId, "waas_orders", orderId, order);
+    const plan = await readWaasRecord(supabaseWorkspaceId, "waas_plans", String(parsed.planId));
+    if (!plan || plan.active === false) return res.status(409).json({ error: "The selected WAAS plan is unavailable" });
+    if (order.checkoutSessionId) { const previous = await stripe.checkout.sessions.retrieve(String(order.checkoutSessionId)); if (previous.status === "open" && previous.url) return res.json({ success: true, orderId, checkoutUrl: previous.url, sessionId: previous.id, reused: true }); }
+    const currency = String(plan.currency || "MYR").toLowerCase(); const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [];
+    if (Number(plan.setupFee) > 0) lineItems.push({ price_data: { currency, product_data: { name: `${plan.name} setup` }, unit_amount: Math.round(Number(plan.setupFee) * 100) }, quantity: 1 });
+    if (Number(plan.recurringFee) > 0) lineItems.push({ price_data: { currency, product_data: { name: `${plan.name} care plan` }, unit_amount: Math.round(Number(plan.recurringFee) * 100), recurring: { interval: plan.billingInterval === "year" ? "year" : "month" } }, quantity: 1 });
+    if (!lineItems.length) return res.status(409).json({ error: "The selected plan has no billable amount" });
+    const metadata = { workspaceId: supabaseWorkspaceId, waasOrderId: orderId, planId: String(plan.id) };
+    const session = await stripe.checkout.sessions.create({ mode: Number(plan.recurringFee) > 0 ? "subscription" : "payment", line_items: lineItems, customer_email: order.customerEmail || undefined, metadata, subscription_data: Number(plan.recurringFee) > 0 ? { metadata } : undefined, success_url: `${process.env.PUBLIC_APP_URL || "https://website.bennietay.com"}/order/${encodeURIComponent(orderId)}?payment=success`, cancel_url: `${process.env.PUBLIC_APP_URL || "https://website.bennietay.com"}/order/${encodeURIComponent(orderId)}?payment=cancelled` }, { idempotencyKey: `waas-storefront-checkout-${supabaseWorkspaceId}-${orderId}` });
+    await upsertWaasRecord(supabaseWorkspaceId, "waas_orders", orderId, { ...order, planId: plan.id, checkoutSessionId: session.id, paymentStatus: "pending", updatedAt: now });
+    await recordWaasActivity(supabaseWorkspaceId, "checkout_created", "waas_order", orderId, { sessionId: session.id }, "storefront");
+    return res.status(201).json({ success: true, orderId, checkoutUrl: session.url, sessionId: session.id });
+  } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid checkout request", details: error.issues }); console.error("WAAS storefront checkout failed", error); return res.status(503).json({ error: "Checkout could not be created" }); }
 });
 
 function validWaasKey(req: express.Request) { const supplied = String(req.headers["x-waas-ingest-key"] || ""); return Boolean(process.env.WAAS_INGEST_API_KEY && supplied === process.env.WAAS_INGEST_API_KEY); }
@@ -556,6 +583,30 @@ app.get("/api/integrations/waas/catalog", async (_req, res) => {
     const templates = latest(rows.filter(row => row.collection === "waas_templates"), row => `${row.productType || ""}:${row.niche || ""}:${row.style || ""}`).map(({ configuration: _configuration, ...template }) => template);
     return res.json({ plans, templates });
   } catch (error) { console.error("WAAS catalogue lookup failed", error); return res.status(503).json({ error: "Catalogue is temporarily unavailable" }); }
+});
+
+// Deterministic manual-AI workflow. The standalone storefront or an operator
+// can request a copy/paste prompt without requiring an AI provider key.
+app.post("/api/waas/content-prompt", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations"]), async (req: AuthenticatedRequest, res) => {
+  const schema = z.object({ orderId: z.string().trim().min(1).max(120) });
+  try {
+    const { orderId } = schema.parse(req.body);
+    const order = await readWaasRecord(req.workspaceId!, "waas_orders", orderId);
+    if (!order) return res.status(404).json({ error: "Order not found" });
+    const onboarding = await readWaasRecord(req.workspaceId!, "waas_onboardings", `onboarding-${orderId}`) || {};
+    const business = onboarding.business || {}; const services = onboarding.services || {}; const website = onboarding.website || {};
+    const product = order.productType === "launch" ? "Launch (single page)" : "Business (Home, Services, About, Reviews/Portfolio, Contact)";
+    const prompt = ["Create structured website copy for a managed WordPress website. Return JSON only.", `Business: ${business.name || order.customerName || ""}`, `Product: ${product}`, `Niche: ${order.niche || ""}`, `Style: ${order.style || "modern"}`, `Location/service areas: ${business.location || business.serviceAreas || ""}`, `Phone/email/WhatsApp: ${business.phone || ""} / ${business.email || ""} / ${business.whatsapp || ""}`, `Services: ${JSON.stringify(services.mainServices || services)}`, `Audience: ${business.targetAudience || "local customers"}`, `CTA: ${website.preferredCta || "Request a quote"}`, "Include headline, subheadline, trust points, services, benefits, about, testimonials, FAQ, CTA, contact, SEO title and meta description. Use concise, truthful copy and no invented awards or claims.", "JSON shape: {headline, subheadline, trustPoints[], services[{name,summary,description}], benefits[], about, testimonials[], faq[{question,answer}], cta, contact, seo:{title,description}}"].join("\n");
+    return res.json({ orderId, prompt, schema: { product: order.productType, niche: order.niche, style: order.style, fields: ["headline", "subheadline", "trustPoints", "services", "benefits", "about", "testimonials", "faq", "cta", "contact", "seo"] } });
+  } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid content prompt request", details: error.issues }); return res.status(503).json({ error: "Content prompt unavailable" }); }
+});
+
+app.get("/api/waas/metrics/fulfilment", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations"]), async (req: AuthenticatedRequest, res) => {
+  const result = await supabaseServer.from("bos_records").select("data").match({ workspace_id: req.workspaceId!, collection_name: "waas_orders", is_soft_deleted: false }).limit(500);
+  if (result.error) return res.status(503).json({ error: "Fulfilment metrics unavailable" });
+  const durations = (result.data || []).map(row => row.data as any).map(order => { const start = Date.parse(String(order.createdAt || "")); const end = Date.parse(String(order.publishedAt || order.approvedAt || order.previewReadyAt || "")); return Number.isFinite(start) && Number.isFinite(end) && end >= start ? (end - start) / 60000 : null; }).filter((value): value is number => value !== null).sort((a, b) => a - b);
+  const percentile = (p: number) => durations.length ? durations[Math.min(durations.length - 1, Math.floor((durations.length - 1) * p))] : null;
+  return res.json({ sampleSize: durations.length, medianMinutes: percentile(0.5), p90Minutes: percentile(0.9), under30Minutes: durations.length ? durations.filter(value => value <= 30).length / durations.length : null, durationsMinutes: durations });
 });
 
 // Server-to-server storefront contract for customer portal links. The
@@ -895,7 +946,11 @@ app.post("/api/waas/deployments/:id/run", deploymentWorkerAuth, requireWorkspace
       await upsertWaasRecord(workspaceId, "waas_deployment_steps", stepId, step);
       await supabaseServer.from("waas_deployment_jobs").update({ lease_expires_at: new Date(Date.now() + 300000).toISOString(), updated_at: new Date().toISOString() }).eq("workspace_id", workspaceId).eq("deployment_id", deploymentId).eq("worker_id", workerId).eq("status", "leased");
       if (process.env.WAAS_MOCK_FAIL_STEP === name && providerKind === "mock") throw new Error(`Configured mock failure at ${name}`);
-      const domain = String((onboardingRow.data as any).website?.domain || "").trim();
+      const onboarding = onboardingRow.data as any;
+      const domain = String(onboarding.website?.domain || "").trim();
+      if (name === "validate_niche" && !String(order.niche || "").trim()) throw new Error("A niche is required before fulfilment can start");
+      if (name === "validate_style" && !WAAS_STYLES.includes(String(order.style || "") as any)) throw new Error(`Unsupported design style: ${String(order.style || "")}`);
+      if (name === "validate_brand" && (!/^#[0-9a-f]{6}$/i.test(String(onboarding.branding?.primaryColour || "#4f46e5")) || (onboarding.branding?.secondaryColour && !/^#[0-9a-f]{6}$/i.test(String(onboarding.branding.secondaryColour))))) throw new Error("Brand colours must be six-digit HEX values");
       if (name === "validate_domain" && !domain) throw new Error("A domain is required before fulfilment can start");
       if (name === "provision_hosting" && !hosting) { hosting = await provider.createWebsite({ customerName: order.customerName, domain: domain || undefined }); deployment = { ...deployment, hostingInstallationId: hosting.installationId, temporaryUrl: hosting.temporaryUrl }; await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, updatedAt: new Date().toISOString() }); }
       if (name === "install_wordpress" && hosting) { const wp = await provider.installWordPress(hosting.installationId, wordpressCredentials); wordpressVersion = wp.wordpressVersion; if (wp.installationId) hosting = { ...hosting, installationId: wp.installationId }; deployment = { ...deployment, wordpressVersion, hostingInstallationId: hosting.installationId }; await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, updatedAt: new Date().toISOString() }); }
@@ -905,8 +960,7 @@ app.post("/api/waas/deployments/:id/run", deploymentWorkerAuth, requireWorkspace
         const masterSecret = String(process.env.WAAS_CONNECTOR_INGEST_SECRET || "");
         if (!masterSecret) throw new Error("WAAS_CONNECTOR_INGEST_SECRET is required to configure lead capture");
         const connectorSecret = crypto.createHmac("sha256", masterSecret).update(`website:${websiteId}`).digest("hex");
-        const onboarding = onboardingRow.data as any;
-        await provider.configureManagedSite(hosting.installationId, { websiteId, adminApiUrl: String(process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"), connectorSecret, configuration: { ...template.configuration, business_name: onboarding.business?.name || order.customerName, hero: onboarding.business?.description || template.configuration?.hero, intro: onboarding.business?.description, phone: onboarding.business?.phone, email: onboarding.business?.email, service_areas: onboarding.business?.serviceAreas, services: onboarding.services?.mainServices, cta: onboarding.website?.preferredCta, primary_colour: onboarding.branding?.primaryColour, secondary_colour: onboarding.branding?.secondaryColour, template_id: order.templateId, template_version: template.version, niche: order.niche, style: order.style } });
+        await provider.configureManagedSite(hosting.installationId, { websiteId, adminApiUrl: String(process.env.PUBLIC_APP_URL || "https://admin.bennietay.com"), connectorSecret, configuration: { ...template.configuration, business_name: onboarding.business?.name || order.customerName, hero: onboarding.business?.description || template.configuration?.hero, intro: onboarding.business?.description, phone: onboarding.business?.phone, email: onboarding.business?.email, service_areas: onboarding.business?.serviceAreas, services: onboarding.services?.mainServices, cta: onboarding.website?.preferredCta, primary_colour: normalizeHex(onboarding.branding?.primaryColour), secondary_colour: normalizeHex(onboarding.branding?.secondaryColour, "#f59e0b"), brand_tokens: deriveBrandTokens(onboarding.branding?.primaryColour, onboarding.branding?.secondaryColour), template_id: order.templateId, template_version: template.version, niche: order.niche, style: order.style, structured_content: onboarding.content || {} } });
       }
       if (name === "configure_domain_ssl" && hosting && domain) await provider.configureDomain(hosting.installationId, domain);
       if (name === "run_qa") {
@@ -925,7 +979,8 @@ app.post("/api/waas/deployments/:id/run", deploymentWorkerAuth, requireWorkspace
       deployment = { ...deployment, status: "running", provider: providerKind, currentStep: names[index + 1] || "review_gate", startedAt: deployment.startedAt || now, startedStep: index };
       if (index < names.length - 1) await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, updatedAt: new Date().toISOString() });
     }
-    const website = { id: websiteId, workspaceId, orderId: deployment.orderId, customerId: order.customerId, domain: String((onboardingRow.data as any).website?.domain || "").trim(), productType: order.productType, niche: order.niche, style: order.style, theme: themePackageId, templateId: order.templateId, version: String(template.version || "1.0.0"), status: "review_required", deploymentStatus: "review_required", wordpressInstallationId: hosting?.installationId, wordpressCredentialRef: credentialRef, temporaryUrl: hosting?.temporaryUrl, wordpressVersion, supportAllowance: Number(plan?.updateAllowance || 0), updateAllowanceUsed: 0, connectorConfigured: true, lastHealthCheck: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; await upsertWaasRecord(workspaceId, "waas_websites", websiteId, website);
+    const brandTokens = deriveBrandTokens((onboardingRow.data as any).branding?.primaryColour, (onboardingRow.data as any).branding?.secondaryColour);
+    const website = { id: websiteId, workspaceId, orderId: deployment.orderId, customerId: order.customerId, domain: String((onboardingRow.data as any).website?.domain || "").trim(), productType: order.productType, niche: order.niche, style: order.style, theme: themePackageId, templateId: order.templateId, version: String(template.version || "1.0.0"), brandTokens, status: "review_required", deploymentStatus: "review_required", wordpressInstallationId: hosting?.installationId, wordpressCredentialRef: credentialRef, temporaryUrl: hosting?.temporaryUrl, wordpressVersion, supportAllowance: Number(plan?.updateAllowance || 0), updateAllowanceUsed: 0, connectorConfigured: true, lastHealthCheck: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; await upsertWaasRecord(workspaceId, "waas_websites", websiteId, website);
     await upsertWaasRecord(workspaceId, "waas_deployments", deploymentId, { ...deployment, status: "review_required", provider: providerKind, currentStep: "review_gate", websiteId, completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); await upsertWaasRecord(workspaceId, "waas_orders", deployment.orderId, { ...order, websiteId, deploymentId, status: "review_required", updatedAt: new Date().toISOString() });
     await supabaseServer.from("waas_deployment_jobs").update({ status: "complete", worker_id: null, lease_expires_at: null, last_error: null, updated_at: new Date().toISOString() }).eq("workspace_id", workspaceId).eq("deployment_id", deploymentId).eq("worker_id", workerId);
     await recordWaasActivity(workspaceId, "deployment_ready_for_review", "waas_deployment", deploymentId, { websiteId, previewUrl: hosting?.temporaryUrl });
@@ -1149,7 +1204,8 @@ app.post("/api/capture", captureLimiter, async (req: AuthenticatedRequest, res) 
     const settings = await readSettings(workspaceId);
     if (!supabaseReady) return res.status(503).json({ error: "Lead capture is temporarily unavailable" });
 
-    if (!settings.leadCapture.serviceOptions.includes(validated.service)) {
+    const waasService = validated.service === "Business Website" ? "Growth Website + SEO" : validated.service;
+    if (!settings.leadCapture.serviceOptions.includes(waasService)) {
       return res.status(400).json({ error: "Validation failed", details: [{ path: ["service"], message: "Choose a valid service" }] });
     }
     if (!settings.leadCapture.budgetRanges.includes(validated.budget)) {
@@ -1183,7 +1239,7 @@ app.post("/api/capture", captureLimiter, async (req: AuthenticatedRequest, res) 
       assignedTo: settings.sales.defaultOwner || undefined,
       details: {
         website: validated.website || "",
-        service: validated.service,
+        service: waasService,
         budget: validated.budget,
         timing: validated.timing,
         message: validated.message || "",

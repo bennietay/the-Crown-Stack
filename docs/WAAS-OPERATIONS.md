@@ -38,6 +38,30 @@ Approve a site only after preview and QA review. Publish performs a fresh
 WordPress/SSL health check. Use the audited WordPress access action to retrieve
 credentials; do not copy credentials into tickets or email.
 
+The connector creates a restricted `BennieTay Customer` role with content
+editing and media permissions plus the controlled Website settings screen. It
+does not grant plugin/theme installation, deletion, hosting access or deployment
+permissions. For an offboarding handover: export the WordPress files/database
+and media, grant a temporary Administrator account through a secure channel,
+transfer domain/DNS ownership, remove `site-config.php` and the managed
+connector after verifying the export, then revoke the managed credentials.
+The customer owns their supplied content, media and domain; the managed theme,
+connector and deployment tooling remain BennieTay operational software until a
+paid handover or migration is completed.
+
+## Customer configuration and content
+
+The storefront configuration supports Launch/Business, eight niches, six
+styles (`modern`, `bold`, `premium`, `minimal`, `elegant`, `vibrant`) and
+primary/secondary HEX colours. `deriveBrandTokens` produces contrast-safe
+hover, light, border, surface and text colours. Operators can request a
+structured manual-AI prompt at `POST /api/waas/content-prompt`; paste the
+returned JSON into the onboarding `content` object before deployment.
+
+Fulfilment timestamps are retained on order/deployment/website records. The
+authenticated `GET /api/waas/metrics/fulfilment` endpoint reports sample size,
+median, p90 and the percentage completed within 30 minutes.
+
 ## Backups and restoration
 
 Supabase backups and Hostinger backups are infrastructure responsibilities and

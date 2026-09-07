@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { MockHostingerProvider } from "../src/server/hostingerProvider";
 import { WAAS_DEPLOYMENT_STEPS, canResumeDeployment, completeStep, failStep, firstIncompleteStep, startStep } from "../src/server/waasDeploymentEngine";
+import { WAAS_NICHES, WAAS_STYLES, contrastRatio, deriveBrandTokens } from "../src/lib/waasDesign";
 
 describe("WAAS architecture", () => {
   it("mock hosting provider provisions a safe preview without credentials", async () => {
@@ -28,13 +29,13 @@ describe("WAAS architecture", () => {
   });
 
   it("deployment state machine resumes at the failed step without repeating completed steps", () => {
-    const completed = WAAS_DEPLOYMENT_STEPS.slice(0, 4).map(name => completeStep({ name, status: "queued", retryCount: 0 }, "2026-09-06T00:00:00.000Z"));
+    const completed = WAAS_DEPLOYMENT_STEPS.slice(0, WAAS_DEPLOYMENT_STEPS.indexOf("install_wordpress")).map(name => completeStep({ name, status: "queued", retryCount: 0 }, "2026-09-06T00:00:00.000Z"));
     const failed = failStep(startStep({ name: "install_wordpress", status: "queued", retryCount: 0 }, "2026-09-06T00:01:00.000Z"), "provider unavailable", "2026-09-06T00:02:00.000Z");
     const steps = [...completed, failed];
     assert.equal(firstIncompleteStep(steps), "install_wordpress");
     assert.equal(canResumeDeployment(steps), true);
     const retried = completeStep(startStep(failed, "2026-09-06T00:03:00.000Z"), "2026-09-06T00:04:00.000Z");
-    assert.equal(firstIncompleteStep([...completed, retried]), "deploy_managed_connector");
+    assert.equal(firstIncompleteStep([...completed, retried]), "create_customer_access");
     assert.equal(completed[0].status, "complete");
   });
 
@@ -45,6 +46,26 @@ describe("WAAS architecture", () => {
     assert.match(server, /waas_ticket_sla/);
     assert.match(server, /customer\.subscription\.deleted/);
     assert.match(server, /\/api\/waas\/tickets\/:ticketId/);
+  });
+
+  it("customer configuration supports all required styles, niches and contrast-safe tokens", () => {
+    assert.deepEqual(WAAS_STYLES, ["modern", "bold", "premium", "minimal", "elegant", "vibrant"]);
+    assert.equal(WAAS_NICHES.length, 8);
+    const tokens = deriveBrandTokens("#17365D", "#D8C9A7");
+    assert.equal(tokens.primary, "#17365D");
+    assert.ok(contrastRatio(tokens.primary, tokens.textOnPrimary) >= 4.5);
+    assert.ok(contrastRatio(tokens.secondary, tokens.textOnSecondary) >= 4.5);
+  });
+
+  it("customer-safe WordPress controls and manual AI workflow are present", () => {
+    const connector = fs.readFileSync(path.join(process.cwd(), "wordpress-plugin/bennietay-managed-connector/bennietay-managed-connector.php"), "utf8");
+    const server = fs.readFileSync(path.join(process.cwd(), "server.ts"), "utf8");
+    assert.match(connector, /bennietay_customer/);
+    assert.match(connector, /manage_bennietay_brand/);
+    assert.match(connector, /bt_save_settings/);
+    assert.match(server, /\/api\/waas\/content-prompt/);
+    assert.match(server, /\/api\/integrations\/waas\/checkout/);
+    assert.match(server, /Return JSON only/);
   });
 
   it("P2 asset verification and SLA visibility remain wired into the server", () => {

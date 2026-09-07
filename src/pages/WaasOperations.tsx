@@ -3,6 +3,7 @@ import { useAuthStore } from "../store/authStore";
 import { useDataStore } from "../store/dataStore";
 import { WaasOrderStatus, WaasProductType, WaasTicketStatus, WaasWebsite } from "../types";
 import { supabase } from "../supabase";
+import { WAAS_STYLES } from "../lib/waasDesign";
 
 type Tab = "overview" | "orders" | "onboarding" | "websites" | "deployments" | "templates" | "support" | "plans";
 const orderStatuses: WaasOrderStatus[] = ["pending_payment", "paid", "awaiting_onboarding", "onboarding_in_progress", "ready_for_deployment", "deploying", "review_required", "customer_review", "approved", "live", "cancelled", "failed"];

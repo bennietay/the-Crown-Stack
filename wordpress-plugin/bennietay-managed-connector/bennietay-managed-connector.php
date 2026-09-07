@@ -24,6 +24,7 @@ final class BennieTay_Managed_Connector {
     }
 
     public static function activate() {
+        add_role('bennietay_customer', 'BennieTay Customer', ['read' => true, 'upload_files' => true, 'edit_posts' => true, 'publish_posts' => true, 'edit_pages' => true, 'publish_pages' => true, 'manage_bennietay_brand' => true]);
         if (!wp_next_scheduled('bennietay_connector_flush_outbox')) {
             wp_schedule_event(time() + 60, 'bennietay_five_minutes', 'bennietay_connector_flush_outbox');
         }
@@ -44,6 +45,9 @@ final class BennieTay_Managed_Connector {
         register_rest_route('bennietay/v1', '/lead', ['methods' => 'POST', 'permission_callback' => '__return_true', 'callback' => [__CLASS__, 'lead']]);
         register_rest_route('bennietay/v1', '/config', ['methods' => 'POST', 'permission_callback' => [__CLASS__, 'signed_request'], 'callback' => [__CLASS__, 'config']]);
     }
+
+    public static function customer_settings_menu() { add_menu_page('Website settings', 'Website settings', 'manage_bennietay_brand', 'bennietay-settings', [__CLASS__, 'settings_page'], 'dashicons-admin-customizer', 3); }
+    public static function settings_page() { if (!current_user_can('manage_bennietay_brand')) return; if (!empty($_POST['bt_settings_nonce']) && wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['bt_settings_nonce'])), 'bt_save_settings')) { $primary = sanitize_hex_color(wp_unslash($_POST['primary'] ?? '')) ?: '#4F46E5'; $secondary = sanitize_hex_color(wp_unslash($_POST['secondary'] ?? '')) ?: '#F59E0B'; $config = get_option(self::CONFIG_OPTION, []); $config['brand_tokens'] = ['primary' => strtoupper($primary), 'secondary' => strtoupper($secondary), 'primaryHover' => strtoupper($primary), 'accent' => strtoupper($secondary)]; update_option(self::CONFIG_OPTION, $config, false); echo '<div class="notice notice-success"><p>Website settings saved.</p></div>'; } $config=get_option(self::CONFIG_OPTION,[]); $tokens=$config['brand_tokens']??[]; echo '<div class="wrap"><h1>Website settings</h1><p>Safe customer controls only. Managed theme, plugins and deployment settings remain protected.</p><form method="post">'.wp_nonce_field('bt_save_settings','bt_settings_nonce',true,false).'<p><label>Primary colour <input type="color" name="primary" value="'.esc_attr($tokens['primary']??'#4F46E5').'" /></label></p><p><label>Secondary colour <input type="color" name="secondary" value="'.esc_attr($tokens['secondary']??'#F59E0B').'" /></label></p><p><button class="button button-primary">Save settings</button></p></form></div>'; }
 
     private static function connector_secret() { return defined('BENNIETAY_CONNECTOR_SECRET') ? (string) BENNIETAY_CONNECTOR_SECRET : ''; }
 
@@ -106,7 +110,13 @@ final class BennieTay_Managed_Connector {
 
     public static function config($request) {
         $payload = $request->get_json_params();
-        update_option(self::CONFIG_OPTION, ['template' => sanitize_text_field($payload['template'] ?? ''), 'cta' => sanitize_text_field($payload['cta'] ?? ''), 'updatedAt' => current_time('mysql', true)], false);
+        $incoming = is_array($payload['configuration'] ?? null) ? $payload['configuration'] : $payload;
+        $existing = get_option(self::CONFIG_OPTION, []);
+        $tokens = is_array($incoming['brand_tokens'] ?? null) ? $incoming['brand_tokens'] : ($existing['brand_tokens'] ?? []);
+        $safeTokens = [];
+        foreach (['primary','secondary','primaryHover','primaryLight','accent','backgroundTint','border','textOnPrimary','textOnSecondary'] as $key) { if (!empty($tokens[$key]) && sanitize_hex_color((string) $tokens[$key])) $safeTokens[$key] = strtoupper(sanitize_hex_color((string) $tokens[$key])); }
+        $next = array_merge(is_array($existing) ? $existing : [], ['template' => sanitize_text_field($incoming['template'] ?? ($existing['template'] ?? '')), 'cta' => sanitize_text_field($incoming['cta'] ?? ($existing['cta'] ?? '')), 'brand_tokens' => $safeTokens, 'updatedAt' => current_time('mysql', true)]);
+        update_option(self::CONFIG_OPTION, $next, false);
         return rest_ensure_response(['updated' => true]);
     }
 
@@ -118,3 +128,4 @@ final class BennieTay_Managed_Connector {
 }
 
 BennieTay_Managed_Connector::boot();
+add_action('admin_menu', ['BennieTay_Managed_Connector', 'customer_settings_menu']);

@@ -5,6 +5,9 @@ add_action('wp_enqueue_scripts','bennietay_business_assets');
 add_theme_support('title-tag'); add_theme_support('post-thumbnails'); add_theme_support('custom-logo'); register_nav_menus(['primary'=>'Primary navigation']);
 function bt_business_config($key,$fallback=''){ $config=get_option('bennietay_managed_config',[]); return isset($config[$key]) && $config[$key]!=='' ? $config[$key] : $fallback; }
 function bt_business_list($key,$fallback=[]){ $value=bt_business_config($key,$fallback); if(is_array($value)) return $value; $decoded=json_decode((string)$value,true); return is_array($decoded)?$decoded:$fallback; }
+function bt_business_brand_tokens(){ $config=get_option('bennietay_managed_config',[]); $tokens=is_array($config['brand_tokens']??null)?$config['brand_tokens']:[]; $defaults=['primary'=>'#4F46E5','secondary'=>'#F59E0B','primaryHover'=>'#4338CA','primaryLight'=>'#EEF2FF','accent'=>'#F59E0B','backgroundTint'=>'#F7F7FF','border'=>'#C7D2FE','textOnPrimary'=>'#FFFFFF','textOnSecondary'=>'#0F172A']; return array_merge($defaults,array_intersect_key($tokens,$defaults)); }
+function bt_business_brand_css(){ $tokens=bt_business_brand_tokens(); echo '<style id="bennietay-brand-tokens">:root{--bt-primary:'.esc_attr($tokens['primary']).';--bt-secondary:'.esc_attr($tokens['secondary']).';--bt-primary-hover:'.esc_attr($tokens['primaryHover']).';--bt-primary-light:'.esc_attr($tokens['primaryLight']).';--bt-accent:'.esc_attr($tokens['accent']).';--bt-background-tint:'.esc_attr($tokens['backgroundTint']).';--bt-border:'.esc_attr($tokens['border']).';--bt-text-on-primary:'.esc_attr($tokens['textOnPrimary']).';--bt-text-on-secondary:'.esc_attr($tokens['textOnSecondary']).';}</style>'; }
+add_action('wp_head','bt_business_brand_css',20);
 
 function bennietay_business_install_pages(){
     $pages=[
