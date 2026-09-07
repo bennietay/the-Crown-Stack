@@ -84,6 +84,7 @@ describe("WAAS architecture", () => {
     assert.match(server, /\/api\/integrations\/waas\/catalog/);
     assert.match(server, /\/api\/integrations\/waas\/orders\/:id\/portal-token/);
     assert.match(server, /\/api\/portal\/orders\/:id/);
+    assert.match(server, /\/api\/portal\/orders\/:id\/tickets\/:ticketId\/messages/);
     assert.match(server, /WAAS_PORTAL_SECRET/);
     assert.match(server, /timingSafeEqual/);
     assert.match(server, /\/api\/ops\/monitoring/);

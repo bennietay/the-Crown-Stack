@@ -610,6 +610,39 @@ app.post("/api/portal/orders/:id/tickets", async (req, res) => {
   } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid support ticket", details: error.issues }); return res.status(503).json({ error: "Support ticket could not be created" }); }
 });
 
+// Customer-facing ticket conversation. Every read/write is checked against
+// the order embedded in the HMAC token; knowing a ticket id alone is never
+// sufficient to access another customer's thread.
+app.get("/api/portal/orders/:id/tickets/:ticketId/messages", async (req, res) => {
+  if (!validPortalToken(req.params.id, String(req.query.token || ""))) return res.status(401).json({ error: "Invalid portal token" });
+  try {
+    const ticket = await readWaasRecord(supabaseWorkspaceId, "waas_support_tickets", req.params.ticketId);
+    if (!ticket || String(ticket.orderId || "") !== req.params.id) return res.status(404).json({ error: "Support ticket not found" });
+    const { data, error } = await supabaseServer.from("bos_records").select("record_id,data").match({ workspace_id: supabaseWorkspaceId, collection_name: "waas_ticket_messages", is_soft_deleted: false }).eq("data->>ticketId", req.params.ticketId).order("created_at", { ascending: true });
+    if (error) throw error;
+    return res.json({ messages: (data || []).map(row => ({ id: row.record_id, ...(row.data || {}) })).filter(message => !message.internal) });
+  } catch (error) { console.error("Portal ticket messages lookup failed", error); return res.status(503).json({ error: "Ticket messages are temporarily unavailable" }); }
+});
+
+app.post("/api/portal/orders/:id/tickets/:ticketId/messages", async (req, res) => {
+  if (!validPortalToken(req.params.id, String(req.query.token || ""))) return res.status(401).json({ error: "Invalid portal token" });
+  try {
+    const ticket = await readWaasRecord(supabaseWorkspaceId, "waas_support_tickets", req.params.ticketId);
+    if (!ticket || String(ticket.orderId || "") !== req.params.id) return res.status(404).json({ error: "Support ticket not found" });
+    const parsed = waasTicketMessageSchema.parse({ ...req.body, ticketId: req.params.ticketId, authorType: "customer", internal: false });
+    const id = `portal-message-${crypto.createHash("sha256").update(`${req.params.id}:${parsed.ticketId}:${parsed.body}`).digest("hex").slice(0, 32)}`;
+    const existing = await readWaasRecord(supabaseWorkspaceId, "waas_ticket_messages", id);
+    if (existing) return res.json({ success: true, duplicate: true, message: existing });
+    const createdAt = new Date().toISOString();
+    const message = { ...parsed, id, workspaceId: supabaseWorkspaceId, createdAt };
+    await upsertWaasRecord(supabaseWorkspaceId, "waas_ticket_messages", id, message);
+    await upsertWaasRecord(supabaseWorkspaceId, "waas_support_tickets", req.params.ticketId, { ...ticket, status: "open", updatedAt: createdAt });
+    await supabaseServer.from("waas_ticket_sla").update({ updated_at: createdAt }).eq("workspace_id", supabaseWorkspaceId).eq("ticket_id", req.params.ticketId);
+    await recordWaasActivity(supabaseWorkspaceId, "ticket_message_added", "waas_ticket", req.params.ticketId, { messageId: id }, "customer_portal");
+    return res.status(201).json({ success: true, message });
+  } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid ticket message", details: error.issues }); console.error("Portal ticket message failed", error); return res.status(503).json({ error: "Ticket message could not be created" }); }
+});
+
 // Create a real Stripe Checkout session for a WAAS order. Orders remain
 // pending until Stripe confirms payment through the signed webhook below.
 app.post("/api/waas/orders/:id/checkout", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "sales"]), acceptanceLimiter, async (req: AuthenticatedRequest, res) => {
