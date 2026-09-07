@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Lead, Opportunity, Customer, Ticket, FollowUpTask, Product, Proposal, DiamondProspect, DiamondCustomer, DiamondFollowUp, RevenueEvent, AffiliateRecord, EtsyRecord, RevenueGoal, MoneyTask, NotificationRecord, AutomationDefinition, ActivityRecord, DiamondProduct, DiamondPurchase, DiamondScript, PrintifyRecord, EtsyProduct, WaasPlan, WaasTemplate, WaasOrder, WaasOnboarding, WaasWebsite, WaasDeployment, WaasDeploymentStep, WaasSupportTicket, WaasTicketMessage, WaasUpdateUsage, WaasActivity } from '../types';
+import { Lead, Opportunity, Customer, Ticket, FollowUpTask, Product, Proposal, DiamondProspect, DiamondCustomer, DiamondFollowUp, RevenueEvent, AffiliateRecord, EtsyRecord, RevenueGoal, MoneyTask, NotificationRecord, AutomationDefinition, ActivityRecord, DiamondProduct, DiamondPurchase, DiamondScript, PrintifyRecord, EtsyProduct, WaasPlan, WaasDeal, WaasTemplate, WaasOrder, WaasOnboarding, WaasWebsite, WaasDeployment, WaasDeploymentStep, WaasSupportTicket, WaasTicketMessage, WaasUpdateUsage, WaasActivity } from '../types';
 import { supabase } from '../supabase';
 
 interface DataState {
@@ -10,7 +10,7 @@ interface DataState {
   printifyRecords: PrintifyRecord[];
   etsyProducts: EtsyProduct[];
   revenueGoals: RevenueGoal[]; moneyTasks: MoneyTask[]; notifications: NotificationRecord[]; automations: AutomationDefinition[]; activityRecords: ActivityRecord[];
-  waasPlans: WaasPlan[]; waasTemplates: WaasTemplate[]; waasOrders: WaasOrder[]; waasOnboardings: WaasOnboarding[]; waasWebsites: WaasWebsite[]; waasDeployments: WaasDeployment[]; waasDeploymentSteps: WaasDeploymentStep[]; waasSupportTickets: WaasSupportTicket[]; waasTicketMessages: WaasTicketMessage[]; waasUpdateUsage: WaasUpdateUsage[]; waasActivities: WaasActivity[];
+  waasPlans: WaasPlan[]; waasDeals: WaasDeal[]; waasTemplates: WaasTemplate[]; waasOrders: WaasOrder[]; waasOnboardings: WaasOnboarding[]; waasWebsites: WaasWebsite[]; waasDeployments: WaasDeployment[]; waasDeploymentSteps: WaasDeploymentStep[]; waasSupportTickets: WaasSupportTicket[]; waasTicketMessages: WaasTicketMessage[]; waasUpdateUsage: WaasUpdateUsage[]; waasActivities: WaasActivity[];
   loading: boolean; activeWorkspaceId: string | null;
   initWorkspace: (workspaceId: string) => () => void;
   addLead: (lead: Omit<Lead, 'id' | 'createdAt' | 'updatedAt'>) => Promise<string>;
@@ -41,6 +41,7 @@ interface DataState {
   updateAutomation: (id: string, updates: Partial<AutomationDefinition>) => Promise<void>;
   addActivity: (activity: Omit<ActivityRecord, 'id' | 'createdAt'>) => Promise<void>;
   addWaasPlan: (value: Omit<WaasPlan, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }) => Promise<void>; updateWaasPlan: (id: string, updates: Partial<WaasPlan>) => Promise<void>;
+  addWaasDeal: (value: Omit<WaasDeal, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }) => Promise<void>; updateWaasDeal: (id: string, updates: Partial<WaasDeal>) => Promise<void>;
   addWaasTemplate: (value: Omit<WaasTemplate, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }) => Promise<void>; updateWaasTemplate: (id: string, updates: Partial<WaasTemplate>) => Promise<void>;
   addWaasOrder: (value: Omit<WaasOrder, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>; updateWaasOrder: (id: string, updates: Partial<WaasOrder>) => Promise<void>;
   addWaasOnboarding: (value: Omit<WaasOnboarding, 'id' | 'updatedAt'>) => Promise<void>; updateWaasOnboarding: (id: string, updates: Partial<WaasOnboarding>) => Promise<void>;
@@ -56,7 +57,7 @@ const now = () => new Date().toISOString();
 const makeId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 // Affiliate/Etsy records remain in Supabase for historical retention, but are no
 // longer loaded into the active operating dashboard.
-const collectionState: Record<string, string> = { leads: 'leads', opportunities: 'opportunities', customers: 'customers', tickets: 'tickets', products: 'products', proposals: 'proposals', tasks: 'tasks', diamondProspects: 'diamond_prospects', diamondCustomers: 'diamond_customers', diamondFollowUps: 'diamond_followups', diamondProducts: 'diamond_products', diamondPurchases: 'diamond_purchases', diamondScripts: 'diamond_scripts', revenueEvents: 'revenue_events', revenueGoals: 'revenue_goals', moneyTasks: 'money_tasks', notifications: 'notifications', automations: 'automations', activityRecords: 'activity_records', waasPlans: 'waas_plans', waasTemplates: 'waas_templates', waasOrders: 'waas_orders', waasOnboardings: 'waas_onboardings', waasWebsites: 'waas_websites', waasDeployments: 'waas_deployments', waasDeploymentSteps: 'waas_deployment_steps', waasSupportTickets: 'waas_support_tickets', waasTicketMessages: 'waas_ticket_messages', waasUpdateUsage: 'waas_update_usage', waasActivities: 'waas_activities' };
+const collectionState: Record<string, string> = { leads: 'leads', opportunities: 'opportunities', customers: 'customers', tickets: 'tickets', products: 'products', proposals: 'proposals', tasks: 'tasks', diamondProspects: 'diamond_prospects', diamondCustomers: 'diamond_customers', diamondFollowUps: 'diamond_followups', diamondProducts: 'diamond_products', diamondPurchases: 'diamond_purchases', diamondScripts: 'diamond_scripts', revenueEvents: 'revenue_events', revenueGoals: 'revenue_goals', moneyTasks: 'money_tasks', notifications: 'notifications', automations: 'automations', activityRecords: 'activity_records', waasPlans: 'waas_plans', waasDeals: 'waas_deals', waasTemplates: 'waas_templates', waasOrders: 'waas_orders', waasOnboardings: 'waas_onboardings', waasWebsites: 'waas_websites', waasDeployments: 'waas_deployments', waasDeploymentSteps: 'waas_deployment_steps', waasSupportTickets: 'waas_support_tickets', waasTicketMessages: 'waas_ticket_messages', waasUpdateUsage: 'waas_update_usage', waasActivities: 'waas_activities' };
 
 async function listCollection(workspaceId: string, collectionName: string) {
   const { data, error } = await supabase.from('bos_records').select('record_id,data').eq('workspace_id', workspaceId).eq('collection_name', collectionName).eq('is_soft_deleted', false).order('updated_at', { ascending: false }).range(0, 1999);
@@ -75,7 +76,7 @@ async function softDelete(workspaceId: string, collectionName: string, id: strin
 }
 
 export const useDataStore = create<DataState>((set, get) => ({
-  leads: [], opportunities: [], customers: [], tickets: [], products: [], proposals: [], tasks: [], diamondProspects: [], diamondCustomers: [], diamondFollowUps: [], diamondProducts: [], diamondPurchases: [], diamondScripts: [], revenueEvents: [], affiliateRecords: [], etsyRecords: [], etsyProducts: [], printifyRecords: [], revenueGoals: [], moneyTasks: [], notifications: [], automations: [], activityRecords: [], waasPlans: [], waasTemplates: [], waasOrders: [], waasOnboardings: [], waasWebsites: [], waasDeployments: [], waasDeploymentSteps: [], waasSupportTickets: [], waasTicketMessages: [], waasUpdateUsage: [], waasActivities: [], loading: false, activeWorkspaceId: null,
+  leads: [], opportunities: [], customers: [], tickets: [], products: [], proposals: [], tasks: [], diamondProspects: [], diamondCustomers: [], diamondFollowUps: [], diamondProducts: [], diamondPurchases: [], diamondScripts: [], revenueEvents: [], affiliateRecords: [], etsyRecords: [], etsyProducts: [], printifyRecords: [], revenueGoals: [], moneyTasks: [], notifications: [], automations: [], activityRecords: [], waasPlans: [], waasDeals: [], waasTemplates: [], waasOrders: [], waasOnboardings: [], waasWebsites: [], waasDeployments: [], waasDeploymentSteps: [], waasSupportTickets: [], waasTicketMessages: [], waasUpdateUsage: [], waasActivities: [], loading: false, activeWorkspaceId: null,
 
   initWorkspace: (workspaceId) => {
     set({ loading: true, activeWorkspaceId: workspaceId });
@@ -132,6 +133,8 @@ export const useDataStore = create<DataState>((set, get) => ({
   addActivity: async (value) => { const id = makeId('activity'); await writeRecord(value.workspaceId, 'activity_records', id, { ...value, id, createdAt: now() }); },
   addWaasPlan: async (value) => { const id = value.id || makeId('waas-plan'); const timestamp = now(); await writeRecord(value.workspaceId, 'waas_plans', id, { ...value, id, createdAt: timestamp, updatedAt: timestamp }); },
   updateWaasPlan: async (id, updates) => { const ws = get().activeWorkspaceId; if (!ws) throw new Error('Workspace is not selected'); await writeRecord(ws, 'waas_plans', id, { ...(get().waasPlans.find(row => row.id === id) || {}), ...updates, id, updatedAt: now() }); },
+  addWaasDeal: async (value) => { const id = value.id || makeId('waas-deal'); const timestamp = now(); await writeRecord(value.workspaceId, 'waas_deals', id, { ...value, id, code: value.code.trim().toUpperCase(), redemptions: value.redemptions || 0, createdAt: timestamp, updatedAt: timestamp }); },
+  updateWaasDeal: async (id, updates) => { const ws = get().activeWorkspaceId; if (!ws) throw new Error('Workspace is not selected'); await writeRecord(ws, 'waas_deals', id, { ...(get().waasDeals.find(row => row.id === id) || {}), ...updates, ...(updates.code ? { code: updates.code.trim().toUpperCase() } : {}), id, updatedAt: now() }); },
   addWaasTemplate: async (value) => { const id = value.id || makeId('waas-template'); const timestamp = now(); await writeRecord(value.workspaceId, 'waas_templates', id, { ...value, id, createdAt: timestamp, updatedAt: timestamp }); },
   updateWaasTemplate: async (id, updates) => { const ws = get().activeWorkspaceId; if (!ws) throw new Error('Workspace is not selected'); await writeRecord(ws, 'waas_templates', id, { ...(get().waasTemplates.find(row => row.id === id) || {}), ...updates, id, updatedAt: now() }); },
   addWaasOrder: async (value) => { const id = makeId('waas-order'); const timestamp = now(); await writeRecord(value.workspaceId, 'waas_orders', id, { ...value, id, createdAt: timestamp, updatedAt: timestamp }); },

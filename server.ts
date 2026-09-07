@@ -13,6 +13,7 @@ import { revenueByBusiness, summarizeRevenue } from "./src/lib/revenue";
 import { getHostingProvider, getHostingProviderKind } from "./src/server/hostingerProvider";
 import { WAAS_DEPLOYMENT_STEPS } from "./src/server/waasDeploymentEngine";
 import { deriveBrandTokens, normalizeHex, WAAS_STYLES } from "./src/lib/waasDesign";
+import { applyWaasDeal, dealMatchesPlan, isWaasDealActive } from "./src/lib/waasDeals";
 
 const isProduction = process.env.NODE_ENV === "production";
 const appMode = process.env.APP_MODE || (isProduction ? "" : "demo");
@@ -348,7 +349,7 @@ const acceptanceLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, keyGene
 const storefrontCheckoutLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, keyGenerator: rateKey, message: { error: "Too many checkout attempts. Please try again later." } });
 
 const waasOrderSchema = z.object({
-  id: z.string().trim().max(120).optional(), customerId: z.string().trim().max(120).optional(), customerName: z.string().trim().min(2).max(160), customerEmail: z.string().email().max(254).optional(), productType: z.enum(["launch", "business"]), planId: z.string().trim().max(120).optional(), niche: z.string().trim().max(100).optional(), style: z.enum(WAAS_STYLES).optional(), paymentStatus: z.enum(["pending", "paid", "failed", "refunded"]).default("pending"), externalId: z.string().trim().max(200).optional(),
+  id: z.string().trim().max(120).optional(), customerId: z.string().trim().max(120).optional(), customerName: z.string().trim().min(2).max(160), customerEmail: z.string().email().max(254).optional(), productType: z.enum(["launch", "business"]), planId: z.string().trim().max(120).optional(), discountCode: z.string().trim().max(80).optional(), niche: z.string().trim().max(100).optional(), style: z.enum(WAAS_STYLES).optional(), paymentStatus: z.enum(["pending", "paid", "failed", "refunded"]).default("pending"), externalId: z.string().trim().max(200).optional(),
 });
 const waasOnboardingSchema = z.object({ orderId: z.string().trim().min(1).max(120), business: z.record(z.string(), z.unknown()).default({}), branding: z.record(z.string(), z.unknown()).default({}), services: z.record(z.string(), z.unknown()).default({}), website: z.record(z.string(), z.unknown()).default({}), assets: z.array(z.object({ name: z.string().max(160), url: z.string().url().max(1000), type: z.string().max(80) })).max(50).default([]), completionPercentage: z.number().min(0).max(100).default(0) }).superRefine((value, ctx) => { for (const field of ["primaryColour", "secondaryColour"] as const) { const colour = value.branding[field]; if (colour !== undefined && colour !== "" && !/^#[0-9a-f]{6}$/i.test(String(colour))) ctx.addIssue({ code: "custom", path: ["branding", field], message: `${field} must be a six-digit HEX colour` }); } });
 const waasTicketSchema = z.object({ id: z.string().trim().max(120).optional(), orderId: z.string().trim().max(120).optional(), websiteId: z.string().trim().max(120).optional(), customerId: z.string().trim().max(120).optional(), subject: z.string().trim().min(2).max(200), description: z.string().trim().min(2).max(10000), category: z.enum(["content_update", "technical_issue", "website_down", "domain_dns", "form_lead", "email", "billing", "seo", "feature_request", "general"]).default("general"), priority: z.enum(["critical", "high", "normal", "request"]).default("normal") });
@@ -373,6 +374,15 @@ async function readWaasRecord(workspaceId: string, collectionName: string, recor
   const { data, error } = await supabaseServer.from("bos_records").select("data").match({ workspace_id: workspaceId, collection_name: collectionName, record_id: recordId, is_soft_deleted: false }).maybeSingle();
   if (error) throw error;
   return data?.data as Record<string, any> | undefined;
+}
+
+async function resolveWaasDeal(workspaceId: string, code: string | undefined, plan: Record<string, any>) {
+  if (!code?.trim()) return undefined;
+  const { data, error } = await supabaseServer.from("bos_records").select("record_id,data").match({ workspace_id: workspaceId, collection_name: "waas_deals", is_soft_deleted: false }).limit(200);
+  if (error) throw error;
+  const row = (data || []).map(item => ({ id: item.record_id, ...(item.data || {}) })).find(item => String(item.code || "").toUpperCase() === code.trim().toUpperCase());
+  if (!row || !isWaasDealActive(row) || !dealMatchesPlan(row, { productType: plan.productType, planId: String(plan.id) })) return undefined;
+  return row;
 }
 
 async function validateTicketAssociations(workspaceId: string, ticket: { customerId?: string; orderId?: string; websiteId?: string }) {
@@ -416,14 +426,17 @@ app.post("/api/integrations/waas/checkout", async (req, res) => {
     if (!existing) await upsertWaasRecord(supabaseWorkspaceId, "waas_orders", orderId, order);
     const plan = await readWaasRecord(supabaseWorkspaceId, "waas_plans", String(parsed.planId));
     if (!plan || plan.active === false) return res.status(409).json({ error: "The selected WAAS plan is unavailable" });
+    const deal = await resolveWaasDeal(supabaseWorkspaceId, parsed.discountCode, plan);
+    if (parsed.discountCode && !deal) return res.status(400).json({ error: "That deal code is invalid, expired, exhausted, or not valid for this plan" });
+    const pricing = applyWaasDeal({ setupFee: Number(plan.setupFee || 0), recurringFee: Number(plan.recurringFee || 0) }, deal);
     if (order.checkoutSessionId) { const previous = await stripe.checkout.sessions.retrieve(String(order.checkoutSessionId)); if (previous.status === "open" && previous.url) return res.json({ success: true, orderId, checkoutUrl: previous.url, sessionId: previous.id, reused: true }); }
     const currency = String(plan.currency || "MYR").toLowerCase(); const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [];
-    if (Number(plan.setupFee) > 0) lineItems.push({ price_data: { currency, product_data: { name: `${plan.name} setup` }, unit_amount: Math.round(Number(plan.setupFee) * 100) }, quantity: 1 });
-    if (Number(plan.recurringFee) > 0) lineItems.push({ price_data: { currency, product_data: { name: `${plan.name} care plan` }, unit_amount: Math.round(Number(plan.recurringFee) * 100), recurring: { interval: plan.billingInterval === "year" ? "year" : "month" } }, quantity: 1 });
+    if (pricing.setupFee > 0) lineItems.push({ price_data: { currency, product_data: { name: `${plan.name} setup${deal ? ` · ${deal.code}` : ""}` }, unit_amount: Math.round(pricing.setupFee * 100) }, quantity: 1 });
+    if (pricing.recurringFee > 0) lineItems.push({ price_data: { currency, product_data: { name: `${plan.name} care plan${deal ? ` · ${deal.code}` : ""}` }, unit_amount: Math.round(pricing.recurringFee * 100), recurring: { interval: plan.billingInterval === "year" ? "year" : "month" } }, quantity: 1 });
     if (!lineItems.length) return res.status(409).json({ error: "The selected plan has no billable amount" });
-    const metadata = { workspaceId: supabaseWorkspaceId, waasOrderId: orderId, planId: String(plan.id) };
-    const session = await stripe.checkout.sessions.create({ mode: Number(plan.recurringFee) > 0 ? "subscription" : "payment", line_items: lineItems, customer_email: order.customerEmail || undefined, metadata, subscription_data: Number(plan.recurringFee) > 0 ? { metadata } : undefined, success_url: `${process.env.PUBLIC_APP_URL || "https://website.bennietay.com"}/order/${encodeURIComponent(orderId)}?payment=success`, cancel_url: `${process.env.PUBLIC_APP_URL || "https://website.bennietay.com"}/order/${encodeURIComponent(orderId)}?payment=cancelled` }, { idempotencyKey: `waas-storefront-checkout-${supabaseWorkspaceId}-${orderId}` });
-    await upsertWaasRecord(supabaseWorkspaceId, "waas_orders", orderId, { ...order, planId: plan.id, checkoutSessionId: session.id, paymentStatus: "pending", updatedAt: now });
+    const metadata = { workspaceId: supabaseWorkspaceId, waasOrderId: orderId, planId: String(plan.id), dealId: deal?.id || "", dealCode: deal?.code || "", discountAmount: String(pricing.discountAmount), originalSetupFee: String(plan.setupFee), originalRecurringFee: String(plan.recurringFee), finalSetupFee: String(pricing.setupFee), finalRecurringFee: String(pricing.recurringFee) };
+    const session = await stripe.checkout.sessions.create({ mode: pricing.recurringFee > 0 ? "subscription" : "payment", line_items: lineItems, customer_email: order.customerEmail || undefined, metadata, subscription_data: pricing.recurringFee > 0 ? { metadata } : undefined, success_url: `${process.env.PUBLIC_APP_URL || "https://website.bennietay.com"}/order/${encodeURIComponent(orderId)}?payment=success`, cancel_url: `${process.env.PUBLIC_APP_URL || "https://website.bennietay.com"}/order/${encodeURIComponent(orderId)}?payment=cancelled` }, { idempotencyKey: `waas-storefront-checkout-${supabaseWorkspaceId}-${orderId}` });
+    await upsertWaasRecord(supabaseWorkspaceId, "waas_orders", orderId, { ...order, planId: plan.id, discountCode: deal?.code, dealId: deal?.id, discountAmount: pricing.discountAmount, originalSetupFee: Number(plan.setupFee), originalRecurringFee: Number(plan.recurringFee), finalSetupFee: pricing.setupFee, finalRecurringFee: pricing.recurringFee, checkoutSessionId: session.id, paymentStatus: "pending", updatedAt: now });
     await recordWaasActivity(supabaseWorkspaceId, "checkout_created", "waas_order", orderId, { sessionId: session.id }, "storefront");
     return res.status(201).json({ success: true, orderId, checkoutUrl: session.url, sessionId: session.id });
   } catch (error) { if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid checkout request", details: error.issues }); console.error("WAAS storefront checkout failed", error); return res.status(503).json({ error: "Checkout could not be created" }); }
@@ -616,13 +629,14 @@ app.get("/api/integrations/waas/orders/:id/status", async (req, res) => {
 
 app.get("/api/integrations/waas/catalog", async (_req, res) => {
   try {
-    const { data, error } = await supabaseServer.from("bos_records").select("collection_name,record_id,data").eq("workspace_id", supabaseWorkspaceId).in("collection_name", ["waas_plans", "waas_templates"]).eq("is_soft_deleted", false).limit(200);
+    const { data, error } = await supabaseServer.from("bos_records").select("collection_name,record_id,data").eq("workspace_id", supabaseWorkspaceId).in("collection_name", ["waas_plans", "waas_templates", "waas_deals"]).eq("is_soft_deleted", false).limit(300);
     if (error) throw error;
     const rows = (data || []).map(row => ({ id: row.record_id, collection: row.collection_name, ...(row.data || {}) })).filter(row => row.active !== false && row.status !== "inactive");
     const latest = <T extends Record<string, any>>(items: T[], key: (item: T) => string) => Array.from(items.reduce((map, item) => { const current = map.get(key(item)); if (!current || new Date(String(item.updatedAt || item.createdAt || 0)).getTime() >= new Date(String(current.updatedAt || current.createdAt || 0)).getTime()) map.set(key(item), item); return map; }, new Map<string, T>()).values());
     const plans = latest(rows.filter(row => row.collection === "waas_plans" && (Number(row.setupFee || 0) > 0 || Number(row.recurringFee || 0) > 0)), row => String(row.productType || row.id));
     const templates = latest(rows.filter(row => row.collection === "waas_templates"), row => `${row.productType || ""}:${row.niche || ""}:${row.style || ""}`).map(({ configuration: _configuration, ...template }) => template);
-    return res.json({ plans, templates });
+    const deals = rows.filter(row => row.collection === "waas_deals" && isWaasDealActive(row)).map(({ redemptions: _redemptions, ...deal }) => deal);
+    return res.json({ plans, templates, deals });
   } catch (error) { console.error("WAAS catalogue lookup failed", error); return res.status(503).json({ error: "Catalogue is temporarily unavailable" }); }
 });
 
@@ -1161,6 +1175,10 @@ app.post("/api/webhooks/stripe", express.raw({ type: "application/json", limit: 
         writes.push({ workspace_id: workspaceId, collection_name: "waas_orders", record_id: waasOrderId, data: { ...(waasOrderRow.data as any), status: nextStatus, paymentStatus: nextPaymentStatus, subscriptionId: object.subscription || object.id || object.parent?.subscription_details?.subscription || undefined, ...(nextStatus === "paid" ? { paidAt: timestamp } : {}), updatedAt: timestamp }, is_soft_deleted: false, updated_at: timestamp });
       }
       const { error } = await supabaseServer.from("bos_records").upsert(writes, { onConflict: "workspace_id,collection_name,record_id" }); if (error) throw error;
+      if (event.type === "checkout.session.completed" && metadata.dealId) {
+        const dealRow = await readWaasRecord(workspaceId, "waas_deals", String(metadata.dealId));
+        if (dealRow) await upsertWaasRecord(workspaceId, "waas_deals", String(metadata.dealId), { ...dealRow, redemptions: Number(dealRow.redemptions || 0) + 1, updatedAt: timestamp });
+      }
       await supabaseServer.from("waas_subscription_events").update({ status: "processed" }).eq("workspace_id", workspaceId).eq("provider", "stripe").eq("provider_event_id", event.id);
       await recordWaasActivity(workspaceId, `stripe_${event.type.replaceAll(".", "_")}`, waasOrderId ? "waas_order" : "proposal", waasOrderId || proposalId, { eventId: event.id });
     }
