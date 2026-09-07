@@ -109,6 +109,8 @@ The storefront can mint an order-scoped customer portal link with
 browser. The endpoint is idempotent and returns a deterministic HMAC token for
 the requested order.
 
+Operational procedures are documented in [`docs/WAAS-OPERATIONS.md`](docs/WAAS-OPERATIONS.md).
+
 Hostinger provisioning is implemented behind `src/server/hostingerProvider.ts`.
 Set `HOSTINGER_API_TOKEN`, `HOSTINGER_USERNAME`, `HOSTINGER_ORDER_ID`, and
 `HOSTINGER_WP_ADMIN_EMAIL` to enable the real provider. A unique random login

@@ -1097,14 +1097,19 @@ app.get("/readyz", (_req, res) => {
 
 app.get("/api/ops/monitoring", authenticateUser, requireWorkspace(), requireRole(["workspace_admin", "super_admin", "operations", "support"]), async (req: AuthenticatedRequest, res) => {
   try {
-    const [deployments, tickets, sla] = await Promise.all([
+    const [deployments, tickets, sla, jobs] = await Promise.all([
       supabaseServer.from("bos_records").select("data").match({ workspace_id: req.workspaceId, collection_name: "waas_deployments", is_soft_deleted: false }).limit(500),
       supabaseServer.from("bos_records").select("data").match({ workspace_id: req.workspaceId, collection_name: "waas_support_tickets", is_soft_deleted: false }).limit(500),
       supabaseServer.from("waas_ticket_sla").select("response_breached,resolution_breached").eq("workspace_id", req.workspaceId).limit(500),
+      supabaseServer.from("waas_deployment_jobs").select("deployment_id,status,attempt_count,lease_expires_at,last_error,available_at,updated_at").eq("workspace_id", req.workspaceId).limit(500),
     ]);
-    if (deployments.error || tickets.error || sla.error) throw deployments.error || tickets.error || sla.error;
-    const deploymentRows = deployments.data || []; const ticketRows = tickets.data || []; const slaRows = sla.data || [];
-    return res.json({ timestamp: new Date().toISOString(), integrations: integrationStatus(), deployments: { queued: deploymentRows.filter(row => ["queued", "running", "waiting"].includes(String((row.data as any)?.status))).length, failed: deploymentRows.filter(row => (row.data as any)?.status === "failed").length, review: deploymentRows.filter(row => (row.data as any)?.status === "review_required").length }, support: { open: ticketRows.filter(row => !["resolved", "closed"].includes(String((row.data as any)?.status))).length, critical: ticketRows.filter(row => ["critical", "high"].includes(String((row.data as any)?.priority)) && !["resolved", "closed"].includes(String((row.data as any)?.status))).length, breached: slaRows.filter(row => row.response_breached || row.resolution_breached).length } });
+    if (deployments.error || tickets.error || sla.error || jobs.error) throw deployments.error || tickets.error || sla.error || jobs.error;
+    const deploymentRows = deployments.data || []; const ticketRows = tickets.data || []; const slaRows = sla.data || []; const jobRows = jobs.data || [];
+    const now = Date.now();
+    const staleLeases = jobRows.filter(row => row.status === "leased" && row.lease_expires_at && new Date(row.lease_expires_at).getTime() < now).length;
+    const queuedJobs = jobRows.filter(row => row.status === "queued");
+    const oldestQueuedAt = queuedJobs.reduce<string | null>((oldest, row) => !oldest || new Date(row.available_at).getTime() < new Date(oldest).getTime() ? row.available_at : oldest, null);
+    return res.json({ timestamp: new Date().toISOString(), integrations: integrationStatus(), deployments: { queued: deploymentRows.filter(row => ["queued", "running", "waiting"].includes(String((row.data as any)?.status))).length, failed: deploymentRows.filter(row => (row.data as any)?.status === "failed").length, review: deploymentRows.filter(row => (row.data as any)?.status === "review_required").length, staleLeases, oldestQueuedAt, jobs: jobRows.map(row => ({ deploymentId: row.deployment_id, status: row.status, attempts: row.attempt_count, lastError: row.last_error, leaseExpiresAt: row.lease_expires_at, availableAt: row.available_at, updatedAt: row.updated_at })) }, support: { open: ticketRows.filter(row => !["resolved", "closed"].includes(String((row.data as any)?.status))).length, critical: ticketRows.filter(row => ["critical", "high"].includes(String((row.data as any)?.priority)) && !["resolved", "closed"].includes(String((row.data as any)?.status))).length, breached: slaRows.filter(row => row.response_breached || row.resolution_breached).length } });
   } catch (error) { console.error("Operations monitoring failed", error); return res.status(503).json({ error: "Monitoring data unavailable" }); }
 });
 

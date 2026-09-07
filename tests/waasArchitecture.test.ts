@@ -124,6 +124,8 @@ describe("WAAS architecture", () => {
     const migration = fs.readFileSync(path.join(process.cwd(), "supabase/migrations/20260907110000_waas_atomic_update_usage.sql"), "utf8");
     assert.match(server, /\/api\/waas\/deployments\/:id\/logs/);
     assert.match(server, /record_waas_update_usage/);
+    assert.match(server, /staleLeases/);
+    assert.match(server, /oldestQueuedAt/);
     assert.match(migration, /pg_advisory_xact_lock/);
     assert.match(migration, /Included update allowance exhausted/);
   });
